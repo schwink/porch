@@ -1,0 +1,3 @@
+[submodule "vendor/uvc"]
+	path = vendor/uvc
+	url = https://github.com/l1npengtul/libuvc-rs.git
