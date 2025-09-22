@@ -1,0 +1,2 @@
+
+= Stationary camera appliance
