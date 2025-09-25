@@ -1,9 +1,33 @@
+use std::path::PathBuf;
 use std::time::Duration;
+
+use chrono::{DateTime, Local};
+
+use clap::Parser;
 
 mod camera;
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    image_storage_dir: PathBuf,
+}
+
 #[tokio::main]
 async fn main() {
+    let cli = Cli::parse();
+
+    let image_storage_dir: PathBuf = cli.image_storage_dir;
+    match tokio::fs::create_dir_all(image_storage_dir.as_path()).await {
+        Err(e) => {
+            panic!(
+                "Unable to create image storage path {:?}: {:?}",
+                image_storage_dir, e
+            )
+        }
+        _ => (),
+    };
+
     let camera_service = camera::CameraService::new();
 
     let handle = tokio::spawn(async move {
@@ -22,6 +46,20 @@ async fn main() {
                 frame.format(),
                 frame.to_bytes().len()
             );
+
+            let now: DateTime<Local> = Local::now();
+            let filename = now.format("%Y-%m-%d_%H-%M-%S-%3f_%z.jpg").to_string();
+            let path = image_storage_dir.join(filename);
+
+            match tokio::fs::write(&path, frame.to_bytes()).await {
+                Ok(()) => println!("Wrote {:?}", path),
+                Err(e) => {
+                    eprintln!("Failed to write path {:?}: {:?}", path, e);
+                }
+            };
+
+            // Note that the format is "raw" jpeg without an ASCII header (starts FF D8 FF E0),
+            // which Safari and Preview seem unable to open on Mac, though Chrome and FireFox work.
         }
     });
 
