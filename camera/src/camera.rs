@@ -22,61 +22,93 @@ impl CameraService {
         // this, we start a dedicated task to manage the camera, and communicate with it via
         // channels.
         tokio::task::spawn(async move {
-            let context = uvc::Context::new().expect("Could not get uvc context");
+            let mut state = StreamCommand::Stop;
 
-            let devices = context.devices().expect("Could not enumerate uvc devices");
-            let device = devices.last().expect("No uvc devices found");
+            'initialization: loop {
+                let context = match uvc::Context::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Failed to get uvc context: {:?}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        continue 'initialization;
+                    }
+                };
 
-            let device_handle = match device.open() {
-                Ok(handle) => handle,
-                Err(e) => {
-                    eprintln!("Failed to open device (will retry): {:?}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                    device.open().expect("Could not open device")
-                }
-            };
+                let devices = match context.devices() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("Failed to enumerate uvc devices: {:?}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        continue 'initialization;
+                    }
+                };
 
-            wait_for_command(&mut cmd_rx, StreamCommand::Start).await;
+                let device = match devices.last() {
+                    Some(d) => d,
+                    None => {
+                        eprintln!("No uvc devices found");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                        continue 'initialization;
+                    }
+                };
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-            loop {
-                {
-                    println!("Starting the camera");
+                // This is the most common step to fail
+                let device_handle = match device.open() {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        eprintln!("Failed to open device: {:?}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        continue 'initialization;
+                    }
+                };
 
-                    let mut stream_handle = match device_handle
-                        .get_stream_handle_with_format_size_and_fps(
-                            uvc::FrameFormat::MJPEG,
-                            800,
-                            600,
-                            5,
-                        ) {
-                        Ok(handle) => handle,
-                        Err(e) => {
-                            eprintln!("Failed to get stream handle: {:?}", e);
-                            continue;
-                        }
-                    };
+                wait_for_state(StreamCommand::Start, &mut state, &mut cmd_rx).await;
 
-                    let stream = match stream_handle.start_stream(stream_callback, frame_tx.clone())
+                loop {
                     {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("Failed to start stream: {:?}", e);
-                            continue;
-                        }
-                    };
+                        println!("Starting the camera");
 
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        let mut stream_handle = match device_handle
+                            .get_stream_handle_with_format_size_and_fps(
+                                uvc::FrameFormat::MJPEG,
+                                800,
+                                600,
+                                5,
+                            ) {
+                            Ok(handle) => handle,
+                            Err(e) => {
+                                eprintln!("Failed to get stream handle: {:?}", e);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                continue 'initialization;
+                            }
+                        };
 
-                    // Wait for Stop command
-                    wait_for_command(&mut cmd_rx, StreamCommand::Stop).await;
+                        let stream =
+                            match stream_handle.start_stream(stream_callback, frame_tx.clone()) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    eprintln!("Failed to start stream: {:?}", e);
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                    continue 'initialization;
+                                }
+                            };
 
-                    println!("Stopping the camera");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                    stream.stop();
+                        // Wait for Stop command
+                        wait_for_state(StreamCommand::Stop, &mut state, &mut cmd_rx).await;
+
+                        println!("Stopping the camera");
+
+                        stream.stop();
+
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+
+                    // Wait for Start command
+                    wait_for_state(StreamCommand::Start, &mut state, &mut cmd_rx).await;
                 }
-
-                // Wait for Start command
-                wait_for_command(&mut cmd_rx, StreamCommand::Start).await;
             }
         });
 
@@ -118,10 +150,19 @@ impl CameraService {
     }
 }
 
-async fn wait_for_command(rx: &mut tokio::sync::mpsc::Receiver<StreamCommand>, cmd: StreamCommand) {
+async fn wait_for_state(
+    desired_state: StreamCommand,
+    current_state: &mut StreamCommand,
+    rx: &mut tokio::sync::mpsc::Receiver<StreamCommand>,
+) {
+    if *current_state == desired_state {
+        return;
+    }
+
     loop {
         let message = rx.recv().await;
-        if message.is_some_and(|v| v == cmd) {
+        if message.is_some_and(|v| v == desired_state) {
+            *current_state = desired_state;
             break;
         } else {
             continue;
