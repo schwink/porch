@@ -41,25 +41,18 @@ async fn main() {
             println!("5-second timer got stream handle");
 
             let frame = handle.rx.recv().await.unwrap();
-            println!(
-                "5-second timer took a picture, format: {:?}, size: {} bytes",
-                frame.format(),
-                frame.to_bytes().len()
-            );
+            println!("5-second timer took a picture, size: {} bytes", frame.len());
 
             let now: DateTime<Local> = Local::now();
             let filename = now.format("%Y-%m-%d_%H-%M-%S-%3f_%z.jpg").to_string();
             let path = image_storage_dir.join(filename);
 
-            match tokio::fs::write(&path, frame.to_bytes()).await {
+            match tokio::fs::write(&path, frame).await {
                 Ok(()) => println!("Wrote {:?}", path),
                 Err(e) => {
                     eprintln!("Failed to write path {:?}: {:?}", path, e);
                 }
             };
-
-            // Note that the format is "raw" jpeg without an ASCII header (starts FF D8 FF E0),
-            // which Safari and Preview seem unable to open on Mac, though Chrome and FireFox work.
         }
     });
 

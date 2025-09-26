@@ -7,4 +7,5 @@ edition = "2024"
 chrono = "0.4.42"
 clap = { version = "4.5.48", features = ["derive"] }
 tokio = { version = "1.47.1", features = [ "fs", "macros", "rt", "rt-multi-thread", "sync", "time" ] }
+turbojpeg = { version ="1.3.3", default-features = false, features = [ "cmake", "require-simd" ] }
 uvc = { path = "../vendor/uvc", features = [ "vendor" ] }

@@ -9,13 +9,13 @@ pub struct CameraService {
     weak_self: Weak<CameraService>,
     subscriber_count: Mutex<usize>,
     cmd_tx: tokio::sync::mpsc::Sender<StreamCommand>,
-    frame_rx: tokio::sync::broadcast::Receiver<Arc<uvc::Frame>>,
+    frame_rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
 }
 
 impl CameraService {
     pub fn new() -> Arc<Self> {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<StreamCommand>(10);
-        let (frame_tx, frame_rx) = tokio::sync::broadcast::channel::<Arc<uvc::Frame>>(1);
+        let (frame_tx, frame_rx) = tokio::sync::broadcast::channel::<Arc<[u8]>>(1);
 
         // The libuvc library wrapper involves a lot of references between components, which makes
         // it difficult to keep state in a Rust struct due to lifetime dependencies. To work around
@@ -71,7 +71,7 @@ impl CameraService {
 
                         let mut stream_handle = match device_handle
                             .get_stream_handle_with_format_size_and_fps(
-                                uvc::FrameFormat::MJPEG,
+                                uvc::FrameFormat::Uncompressed,
                                 800,
                                 600,
                                 5,
@@ -170,8 +170,37 @@ async fn wait_for_state(
     }
 }
 
-fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Arc<uvc::Frame>>) {
-    let num_subscribers = match tx.send(Arc::new(frame.duplicate().unwrap())) {
+fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Arc<[u8]>>) {
+    println!("Got a frame in format {:?}", frame.format());
+
+    let rgb = match frame.to_rgb() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to convert frame to RGB: {:?}", e);
+            return;
+        }
+    };
+
+    let image = turbojpeg::Image {
+        format: turbojpeg::PixelFormat::RGB,
+        height: frame.height() as usize,
+        width: frame.width() as usize,
+        pixels: rgb.to_bytes(),
+        pitch: (frame.width() * 3) as usize,
+    };
+
+    let jpeg = match turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Failed to compress frame to JPEG: {:?}", e);
+            return;
+        }
+    };
+
+    let jpeg_slice: &[u8] = &jpeg;
+    let jpeg_buffer: Arc<[u8]> = Arc::from(jpeg_slice);
+
+    let num_subscribers = match tx.send(jpeg_buffer) {
         Ok(n) => n - 1, // Don't count the service's copy of the receiver
         Err(_) => 0,
     };
@@ -189,7 +218,7 @@ enum StreamCommand {
  */
 pub struct StreamHandle {
     service: Arc<CameraService>,
-    pub rx: tokio::sync::broadcast::Receiver<Arc<uvc::Frame>>,
+    pub rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
 }
 
 impl Drop for StreamHandle {
