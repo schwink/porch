@@ -9,7 +9,7 @@ pub struct CameraService {
     weak_self: Weak<CameraService>,
     subscriber_count: Mutex<usize>,
     cmd_tx: tokio::sync::mpsc::Sender<StreamCommand>,
-    frame_rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
+    pub frame_rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
 }
 
 impl CameraService {
