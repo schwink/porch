@@ -8,7 +8,7 @@ use axum::{
     response::Response,
     routing::{get, get_service},
 };
-use std::convert::Infallible;
+use std::{convert::Infallible, path::PathBuf};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::services::ServeDir;
 
@@ -24,12 +24,15 @@ pub struct WebServer {
  * Serves a static site at / from var/www.
  */
 impl WebServer {
-    pub async fn new(camera_service: Arc<CameraService>) -> Self {
+    pub async fn new(camera_service: Arc<CameraService>, image_storage_dir: PathBuf) -> Self {
         let handle = tokio::task::spawn(async move {
             let static_file_service = get_service(ServeDir::new("var/www"));
 
+            let images_static_file_service = get_service(ServeDir::new(image_storage_dir));
+
             let app = Router::new()
                 .fallback_service(static_file_service)
+                .nest_service("/images", images_static_file_service)
                 .route("/live.mjpeg", get(live))
                 .route("/peek.mjpeg", get(peek))
                 .with_state(camera_service.clone());
