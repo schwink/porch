@@ -5,6 +5,7 @@ use chrono::{DateTime, Local};
 
 use clap::Parser;
 
+mod api;
 mod camera;
 mod webserver;
 
@@ -31,8 +32,14 @@ async fn main() {
 
     let camera_service = camera::CameraService::new();
 
-    let _webserver =
-        webserver::WebServer::new(camera_service.clone(), image_storage_dir.clone()).await;
+    let api = api::Api::new(image_storage_dir.clone());
+
+    let _webserver = webserver::WebServer::new(
+        camera_service.clone(),
+        api.clone(),
+        image_storage_dir.clone(),
+    )
+    .await;
 
     let handle = tokio::spawn(async move {
         // Take a picture every 5 seconds
