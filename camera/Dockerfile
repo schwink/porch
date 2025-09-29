@@ -22,4 +22,6 @@ WORKDIR /app
 COPY --from=builder /app/target/release/porch-camera ./porch-camera
 COPY var ./var
 
+EXPOSE 8080
+
 CMD ["./porch-camera", "/var/porch/images"]
