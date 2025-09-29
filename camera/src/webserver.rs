@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
+use crate::camera::StreamHandle;
 use async_stream::stream;
 use axum::{
     Json, Router,
@@ -72,8 +73,15 @@ impl Drop for WebServer {
     }
 }
 
-fn mjpeg_stream(mut rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>) -> Response<Body> {
+fn mjpeg_stream(
+    mut rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
+    handle: Option<StreamHandle>,
+) -> Response<Body> {
     let stream = stream! {
+        // Pin the StreamHandle into the generator state so it stays live for the
+        // duration of the returned stream.
+        let _pinned_handle = handle;
+
         loop {
             if let Ok(frame) = rx.recv().await {
                 let mut headers = http::header::HeaderMap::<http::HeaderValue>::with_capacity(2);
@@ -108,7 +116,8 @@ fn mjpeg_stream(mut rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>) -> Response
  */
 async fn live(State(state): State<WebServerState>) -> Response<Body> {
     let camera_handle = state.camera_service.start().await;
-    mjpeg_stream(camera_handle.rx.resubscribe())
+    let rx = camera_handle.rx.resubscribe();
+    mjpeg_stream(rx, Some(camera_handle))
 }
 
 /**
@@ -118,7 +127,7 @@ async fn live(State(state): State<WebServerState>) -> Response<Body> {
  * the camera.
  */
 async fn peek(State(state): State<WebServerState>) -> Response<Body> {
-    mjpeg_stream(state.camera_service.frame_rx.resubscribe())
+    mjpeg_stream(state.camera_service.frame_rx.resubscribe(), None)
 }
 
 #[derive(Debug, Serialize)]
