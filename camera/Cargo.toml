@@ -8,6 +8,7 @@ async-stream = "0.3.6"
 axum = { version = "0.8.4", features = ["macros"] }
 chrono = "0.4.42"
 clap = { version = "4.5.48", features = ["derive"] }
+cron = "0.15.0"
 futures = "0.3.31"
 http = "0.2.4"
 multipart-stream = "0.1.2"

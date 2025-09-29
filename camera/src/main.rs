@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Local};
@@ -42,17 +43,21 @@ async fn main() {
     .await;
 
     let handle = tokio::spawn(async move {
-        // Take a picture every 5 seconds
-        loop {
-            println!("5-second sleeping");
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            println!("5-second woke up");
+        // Every 5 minutes
+        let cron_expression = "0 0,5,10,15,20,25,30,35,40,45,50,55 * * * * *";
+
+        let schedule = cron::Schedule::from_str(cron_expression).unwrap();
+        for datetime in schedule.upcoming(chrono::Utc).take(10) {
+            let offset = datetime.timestamp() - chrono::Utc::now().timestamp();
+            println!("Next scheduled photo at {} in {} seconds", datetime, offset);
+            if offset > 0 {
+                let delay = Duration::from_secs(offset.try_into().unwrap());
+                tokio::time::sleep_until(tokio::time::Instant::now() + delay).await;
+            }
 
             let mut handle: camera::StreamHandle = camera_service.start().await;
-            println!("5-second timer got stream handle");
 
             let frame = handle.rx.recv().await.unwrap();
-            println!("5-second timer took a picture, size: {} bytes", frame.len());
 
             let now: DateTime<Local> = Local::now();
             let filename = now.format("%Y-%m-%d_%H-%M-%S-%3f_%z.jpg").to_string();
