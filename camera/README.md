@@ -31,3 +31,14 @@ The scheduler then calculates the next capture time, potentially calibrating its
 #### /live.mjpeg
 
 While a request to this resource it open, the webserver keeps the camera awake and transmits its frames to the client.
+
+## Deployment
+
+An arm64 Docker image running on an OrangePi.
+
+The image takes forever to build as a GitHub action. To build and publish it locally:
+```
+docker build . -t ghcr.io/schwink/porch-camera:local --no-cache
+docker push ghcr.io/schwink/porch-camera:local
+```
+
