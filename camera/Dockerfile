@@ -20,5 +20,6 @@ RUN rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 COPY --from=builder /app/target/release/porch-camera ./porch-camera
+COPY var ./var
 
 CMD ["./porch-camera", "/var/porch/images"]
