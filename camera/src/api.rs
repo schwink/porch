@@ -10,8 +10,16 @@ pub struct Frame {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frames {
     nodes: Vec<Frame>,
+
+    #[serde(rename = "hasNextPage")]
     has_next_page: bool,
-    cursor: Option<String>,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
+
+    #[serde(rename = "hasPreviousPage")]
+    has_previous_page: bool,
+    #[serde(rename = "startCursor")]
+    start_cursor: Option<String>,
 }
 
 pub struct ApiError {
@@ -28,10 +36,32 @@ impl Api {
         Arc::new(Api { image_storage_dir })
     }
 
+    /**
+     * Load frames with cursor-based pagination.
+     *
+     * [oldest] ... [start of page] ... [end of page] ... [newest]
+     *              ^ start cursor      ^ end cursor
+     *
+     * To fetch neweset frames:
+     *                                       |-------------------|
+     *                                       ^ last: count       ^
+     *
+     * To paginate backwards to older frames:
+     *                   |-------------------|
+     *                   ^ last: count       ^ before: previous start cursor
+     *
+     * To fetch oldest frames: (not implemented)
+     * |-------------------|
+     * ^                   ^ first: count
+     *
+     * To paginate forwards to newer frames: (not implemented)
+     *                     |-------------------------------|
+     *                     ^ after: previous end cursor    ^ first: count
+     */
     pub async fn frames(
         &self,
-        after_cursor: Option<String>,
-        page_size: Option<usize>,
+        last: Option<usize>,
+        before: Option<String>,
     ) -> Result<Frames, ApiError> {
         let mut ls = match tokio::fs::read_dir(self.image_storage_dir.clone()).await {
             Ok(ls) => ls,
@@ -50,19 +80,20 @@ impl Api {
                 continue;
             };
 
-            match after_cursor {
+            match before {
                 None => entries.push(entry),
                 Some(ref c) => {
-                    if &name > c {
+                    if &name < c {
                         entries.push(entry);
                     }
                 }
             }
         }
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_cached_key(|e| e.file_name());
+        entries.reverse();
 
         let max_size: usize = 100;
-        let size = match page_size {
+        let size = match last {
             None => max_size,
             Some(s) => {
                 if s < max_size {
@@ -79,12 +110,15 @@ impl Api {
                 name: e.file_name().into_string().unwrap(),
             })
             .collect();
-        let cursor = frames.last().map(|f| f.name.clone());
+        let start_cursor = frames.last().map(|f| f.name.clone());
+        let end_cursor = frames.first().map(|f| f.name.clone());
 
         Ok(Frames {
             nodes: frames,
-            has_next_page: cursor.is_some(),
-            cursor,
+            has_next_page: false,
+            has_previous_page: end_cursor.is_some(),
+            start_cursor,
+            end_cursor,
         })
     }
 }

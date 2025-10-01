@@ -137,19 +137,15 @@ pub struct ApiErrorData {
 
 #[derive(Deserialize)]
 struct ApiFramesQueryParams {
-    pub after_cursor: Option<String>,
-    pub page_size: Option<usize>,
+    pub last: Option<usize>,
+    pub before: Option<String>,
 }
 
 async fn api_frames(
     State(state): State<WebServerState>,
     Query(params): Query<ApiFramesQueryParams>,
 ) -> impl axum::response::IntoResponse {
-    match state
-        .api
-        .frames(params.after_cursor, params.page_size)
-        .await
-    {
+    match state.api.frames(params.last, params.before).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err(e) => (e.code, Json(ApiErrorData { message: e.message })).into_response(),
     }

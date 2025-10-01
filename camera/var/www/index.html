@@ -3,6 +3,49 @@
 <head>
   <meta charset="UTF-8" />
   <title>Porch</title>
+  <style>
+    body {
+      background-color: lightgray;
+    }
+
+    div.live_video {
+      background-color: white;
+      width: fit-content;
+      padding: 0;
+      margin: 4px;
+      border-radius: 8px;
+      border: 1px solid darkgray;
+    }
+
+    div.live_video p {
+      padding: 4px;
+      margin: 0;
+    }
+
+    div.live_video iframe {
+      padding: 0;
+      margin: 0;
+      border-radius: 8px;
+      border: 0;
+    }
+
+    ul.frame_list {
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    li.frame {
+      display: inline-block;
+      padding: 4px;
+      margin: 0;
+    }
+
+    li.frame img {
+      border-radius: 8px;
+      border: 1px solid darkgray;
+    }
+  </style>
 </head>
 
 <body>
@@ -24,27 +67,75 @@
         setIsLive(isLive => !isLive);
       };
 
-      return html`
-        <p key="toggle">
-          <button onClick=${handleToggle}>
-            ${isLive ? 'Switch to Peek' : 'Switch to Live'}
-          </button>
-        </p>
+      return html`<div className="live_video">
+          <p key="toggle">
+            <button onClick=${handleToggle}>
+              ${isLive ? 'Switch to Peek' : 'Switch to Live'}
+            </button>
+          </p>
 
-        <!--
-          Once an <img> is opened, the browser will not stop downloading it, even if it is removed
-          from the DOM. To enable the connection to be closed and the camera to be freed, load the
-          image in a separate document in a frame.
-        -->
-        <iframe src=${isLive ? 'live.html' : 'peek.html'} width=800 height=600></iframe>
-      `;
+          <!--
+            Once an <img> is opened, the browser will not stop downloading it, even if it is removed
+            from the DOM. To enable the connection to be closed and the camera to be freed, load the
+            image in a separate document in a frame.
+          -->
+          <iframe key="video" src=${isLive ? 'live.html' : 'peek.html'} width=800 height=600></iframe>
+        </div>`;
     };
     LiveVideo.propTypes = {
     };
 
+    const FrameListItem = ({ frame } = props) => {
+      return html`<li className="frame"><img src="frames/${frame.name}"></img></li>`;
+    };
+    FrameListItem.propTypes = {
+      frame: PropTypes.object.isRequired,
+    };
+
+    const FrameList = (props) => {
+      const [frames, setFrames] = React.useState([]);
+      const [error, setError] = React.useState(false);
+      const [isLoading, setIsLoading] = React.useState(true);
+
+      React.useEffect(() => {
+        const fetchData = async () => {
+          try {
+            const response = await fetch('api/frames?last=10');
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+            const frames = result.nodes;
+            // Sort frames newest first
+            frames.sort((a, b) => b.name.localeCompare(a.name));
+            setFrames(frames);
+          } catch (error) {
+            setError(error);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+
+        fetchData();
+      }, []); // Empty dependency array means this effect runs once on mount
+
+      if (isLoading) {
+        return html`<p>Loading...</p>`;
+      } else if (error) {
+        return html`<p>Error</p>`;
+      } else {
+        return html`<ul className="frame_list">
+            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.name} />`)}
+          </ul>`;
+      }
+    };
+    FrameList.propTypes = {
+    };
+
     const App = (props) => {
       return html`<div>
-          <${LiveVideo}/>
+          <${LiveVideo} key="live_video"/>
+          <${FrameList} key="frame_list" />
         </div>`;
     }
     App.propTypes = {
