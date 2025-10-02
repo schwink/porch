@@ -1,10 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
     name: String,
+    timestamp: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -30,6 +32,8 @@ pub struct ApiError {
 pub struct Api {
     image_storage_dir: PathBuf,
 }
+
+pub static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z.jpg";
 
 impl Api {
     pub fn new(image_storage_dir: PathBuf) -> Arc<Api> {
@@ -106,8 +110,20 @@ impl Api {
         let frames: Vec<Frame> = entries
             .into_iter()
             .take(size)
-            .map(|e| Frame {
-                name: e.file_name().into_string().unwrap(),
+            .map(|e| {
+                // We know from above that this is valid UTF-8
+                let file_name = e.file_name().into_string().unwrap();
+
+                let timestamp: i64 =
+                    match DateTime::parse_from_str(file_name.as_str(), FILE_NAME_FORMAT) {
+                        Ok(t) => t.timestamp_millis(),
+                        Err(_) => DateTime::<Local>::default().timestamp_millis(),
+                    };
+
+                return Frame {
+                    name: file_name,
+                    timestamp,
+                };
             })
             .collect();
         let start_cursor = frames.last().map(|f| f.name.clone());

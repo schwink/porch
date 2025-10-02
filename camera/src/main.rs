@@ -60,7 +60,7 @@ async fn main() {
             let frame = handle.rx.recv().await.unwrap();
 
             let now: DateTime<Local> = Local::now();
-            let filename = now.format("%Y-%m-%d_%H-%M-%S-%3f_%z.jpg").to_string();
+            let filename = now.format(api::FILE_NAME_FORMAT).to_string();
             let path = image_storage_dir.join(filename);
 
             match tokio::fs::write(&path, frame).await {

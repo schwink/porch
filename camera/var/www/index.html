@@ -36,14 +36,24 @@
     }
 
     li.frame {
-      display: inline-block;
-      padding: 4px;
-      margin: 0;
+      background-color: white;
+      padding: 0;
+      margin: 4px;
+      display: flex;
+      flex-direction: row;
+      border-radius: 8px;
+      border: 1px solid darkgray;
     }
 
     li.frame img {
       border-radius: 8px;
-      border: 1px solid darkgray;
+      border-right: 1px solid darkgray;
+    }
+
+    li.frame p {
+      margin-left: 16px;
+      font-size: 1.2em;
+      width: fit-content;
     }
   </style>
 </head>
@@ -86,7 +96,10 @@
     };
 
     const FrameListItem = ({ frame } = props) => {
-      return html`<li className="frame"><img src="frames/${frame.name}"></img></li>`;
+      return html`<li className="frame">
+        <img src="frames/${frame.name}"></img>
+        <p>${new Date(frame.timestamp).toLocaleString()}</p>
+      </li>`;
     };
     FrameListItem.propTypes = {
       frame: PropTypes.object.isRequired,
