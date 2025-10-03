@@ -105,17 +105,24 @@
       frame: PropTypes.object.isRequired,
     };
 
-    const FrameList = (props) => {
+    const FrameList = ({ scrollContainerRef } = props) => {
       const [frames, setFrames] = React.useState([]);
+
+      const [isLoading, setIsLoading] = React.useState(true);
+      const [isFetching, setIsFetching] = React.useState(false);
       const [startCursor, setStartCursor] = React.useState(null);
       const [hasPreviousPage, setHasPreviousPage] = React.useState(true);
       const [error, setError] = React.useState(false);
-      const [isLoading, setIsLoading] = React.useState(true);
 
       const fetchData = async () => {
         if (!hasPreviousPage) {
           return;
         }
+
+        if (isFetching) {
+          return;
+        }
+        setIsFetching(true);
 
         try {
           const response = await fetch(`api/frames?last=10&before=${startCursor}`);
@@ -127,6 +134,7 @@
           // Sort frames newest first
           const newFrames = result.nodes;
           newFrames.sort((a, b) => b.timestamp - a.timestamp);
+          console.log(`Fetched ${newFrames.length} frames`);
           setFrames([...frames, ...newFrames]);
 
           setStartCursor(result.startCursor);
@@ -135,12 +143,31 @@
           setError(error);
         } finally {
           setIsLoading(false);
+          setIsFetching(false);
+        }
+      };
+
+      const onScroll = () => {
+        if (scrollContainerRef.current) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+          if (scrollTop + clientHeight === scrollHeight) {
+            fetchData();
+          }
         }
       };
 
       React.useEffect(() => {
         fetchData();
       }, []);
+
+      React.useEffect(() => {
+        const current = scrollContainerRef.current;
+        current?.addEventListener('scroll', onScroll);
+
+        return () => {
+          current?.removeEventListener('scroll', onScroll);
+        };
+      }, [scrollContainerRef.current, isFetching, startCursor, hasPreviousPage, frames]);
 
       if (isLoading) {
         return html`<p>Loading...</p>`;
@@ -158,12 +185,15 @@
       }
     };
     FrameList.propTypes = {
+      scrollContainerRef: PropTypes.object.isRequired,
     };
 
     const App = (props) => {
-      return html`<div>
-          <${LiveVideo} key="live_video"/>
-          <${FrameList} key="frame_list" />
+      const scrollContainerRef = React.useRef();
+
+      return html`<div ref=${scrollContainerRef} style=${{ "height": "100%", "overflow": "auto" }}>
+          <${LiveVideo} key="live_video" />
+          <${FrameList} key="frame_list" scrollContainerRef=${scrollContainerRef} />
         </div>`;
     }
     App.propTypes = {
