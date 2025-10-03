@@ -176,11 +176,15 @@
       } else {
         return html`<ul className="frame_list">
             ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.name} />`)}
-            <li key="more">
-              <p>
-                <button onClick=${fetchData}>Fetch more</button>
-              </p>
-            </li>
+            ${isFetching && html`<li key="loading">Loading...</li>`}
+            ${!hasPreviousPage && html`<li key="end">No more frames</li>`}
+            ${hasPreviousPage && html`
+              <li key="more">
+                  <p>
+                    <button onClick=${fetchData}>Fetch more</button>
+                  </p>
+                </li>
+              `}
           </ul>`;
       }
     };
