@@ -2,6 +2,12 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
+pub struct Frame {
+    pub timestamp: chrono::DateTime<chrono::Local>,
+    pub jpeg: Arc<[u8]>,
+}
+
 /**
  * Manages access to the camera.
  */
@@ -9,13 +15,13 @@ pub struct CameraService {
     weak_self: Weak<CameraService>,
     subscriber_count: Mutex<usize>,
     cmd_tx: tokio::sync::mpsc::Sender<StreamCommand>,
-    pub frame_rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
+    pub frame_rx: tokio::sync::broadcast::Receiver<Frame>,
 }
 
 impl CameraService {
     pub fn new() -> Arc<Self> {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<StreamCommand>(10);
-        let (frame_tx, frame_rx) = tokio::sync::broadcast::channel::<Arc<[u8]>>(1);
+        let (frame_tx, frame_rx) = tokio::sync::broadcast::channel::<Frame>(1);
 
         // The libuvc library wrapper involves a lot of references between components, which makes
         // it difficult to keep state in a Rust struct due to lifetime dependencies. To work around
@@ -170,8 +176,10 @@ async fn wait_for_state(
     }
 }
 
-fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Arc<[u8]>>) {
+fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Frame>) {
     println!("Got a frame in format {:?}", frame.format());
+
+    let timestamp = chrono::Local::now();
 
     let rgb = match frame.to_rgb() {
         Ok(f) => f,
@@ -199,8 +207,12 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<A
 
     let jpeg_slice: &[u8] = &jpeg;
     let jpeg_buffer: Arc<[u8]> = Arc::from(jpeg_slice);
+    let frame = Frame {
+        timestamp,
+        jpeg: jpeg_buffer,
+    };
 
-    let num_subscribers = match tx.send(jpeg_buffer) {
+    let num_subscribers = match tx.send(frame) {
         Ok(n) => n - 1, // Don't count the service's copy of the receiver
         Err(_) => 0,
     };
@@ -218,7 +230,7 @@ enum StreamCommand {
  */
 pub struct StreamHandle {
     service: Arc<CameraService>,
-    pub rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
+    pub rx: tokio::sync::broadcast::Receiver<Frame>,
 }
 
 impl Drop for StreamHandle {

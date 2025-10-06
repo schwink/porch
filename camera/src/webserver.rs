@@ -74,7 +74,7 @@ impl Drop for WebServer {
 }
 
 fn mjpeg_stream(
-    mut rx: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
+    mut rx: tokio::sync::broadcast::Receiver<crate::camera::Frame>,
     handle: Option<StreamHandle>,
 ) -> Response<Body> {
     let stream = stream! {
@@ -86,11 +86,11 @@ fn mjpeg_stream(
             if let Ok(frame) = rx.recv().await {
                 let mut headers = http::header::HeaderMap::<http::HeaderValue>::with_capacity(2);
                 headers.insert(http::header::CONTENT_TYPE, http::header::HeaderValue::from_static("image/jpeg"));
-                headers.insert(http::header::CONTENT_LENGTH, frame.len().into());
+                headers.insert(http::header::CONTENT_LENGTH, frame.jpeg.len().into());
 
                 let result: Result<multipart_stream::Part, Infallible> = Ok(multipart_stream::Part {
                     headers: headers,
-                    body: Bytes::from_owner(frame),
+                    body: Bytes::from_owner(frame.jpeg),
                 });
                 yield result
             }

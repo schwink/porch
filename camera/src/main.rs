@@ -2,8 +2,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{DateTime, Local};
-
 use clap::Parser;
 
 mod api;
@@ -59,11 +57,10 @@ async fn main() {
 
             let frame = handle.rx.recv().await.unwrap();
 
-            let now: DateTime<Local> = Local::now();
-            let filename = now.format(api::FILE_NAME_FORMAT).to_string();
+            let filename = frame.timestamp.format(api::FILE_NAME_FORMAT).to_string();
             let path = image_storage_dir.join(filename);
 
-            match tokio::fs::write(&path, frame).await {
+            match tokio::fs::write(&path, frame.jpeg).await {
                 Ok(()) => println!("Wrote {:?}", path),
                 Err(e) => {
                     eprintln!("Failed to write path {:?}: {:?}", path, e);
