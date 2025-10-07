@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,7 +33,25 @@ pub struct Api {
     image_storage_dir: PathBuf,
 }
 
-pub static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z.jpg";
+static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z";
+
+pub fn time_to_file_basename<Tz>(time: DateTime<Tz>) -> String
+where
+    Tz: TimeZone,
+    <Tz as TimeZone>::Offset: std::fmt::Display,
+{
+    time.format(FILE_NAME_FORMAT).to_string()
+}
+
+pub fn file_name_to_timestamp_ms(file_name: &str) -> i64 {
+    let mut path = PathBuf::from(file_name);
+    path.set_extension("");
+
+    match DateTime::parse_from_str(path.to_str().unwrap(), FILE_NAME_FORMAT) {
+        Ok(t) => t.timestamp_millis(),
+        Err(_) => DateTime::<Local>::default().timestamp_millis(),
+    }
+}
 
 impl Api {
     pub fn new(image_storage_dir: PathBuf) -> Arc<Api> {
@@ -84,6 +102,11 @@ impl Api {
                 continue;
             };
 
+            if !name.ends_with(".jpg") {
+                // We only want to list JPEG files
+                continue;
+            }
+
             match before {
                 None => entries.push(entry),
                 Some(ref c) => {
@@ -111,18 +134,14 @@ impl Api {
             .into_iter()
             .take(size)
             .map(|e| {
-                // We know from above that this is valid UTF-8
+                // We know from above that the file name is valid UTF-8, i.e. can be a String
                 let file_name = e.file_name().into_string().unwrap();
 
-                let timestamp: i64 =
-                    match DateTime::parse_from_str(file_name.as_str(), FILE_NAME_FORMAT) {
-                        Ok(t) => t.timestamp_millis(),
-                        Err(_) => DateTime::<Local>::default().timestamp_millis(),
-                    };
+                let timestamp_ms: i64 = file_name_to_timestamp_ms(file_name.as_str());
 
                 return Frame {
                     name: file_name,
-                    timestamp,
+                    timestamp: timestamp_ms,
                 };
             })
             .collect();
@@ -136,5 +155,31 @@ impl Api {
             start_cursor,
             end_cursor,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_timestamp_file_name_parse() {
+        let dt = Utc.with_ymd_and_hms(2024, 6, 15, 12, 34, 56).unwrap();
+        let file_name = time_to_file_basename(dt);
+        assert_eq!(file_name, "2024-06-15_12-34-56-000_+0000");
+
+        let timestamp_ms = file_name_to_timestamp_ms("2024-06-15_12-34-56-000_+0000.jpg");
+        assert_eq!(timestamp_ms, dt.timestamp_millis());
+    }
+
+    #[test]
+    fn test_timestamp_file_name_parse_invalid() {
+        let invalid_file_name = "invalid_file_name.jpg";
+        let timestamp_ms = file_name_to_timestamp_ms(invalid_file_name);
+        assert_eq!(
+            timestamp_ms,
+            DateTime::<Local>::default().timestamp_millis()
+        );
     }
 }

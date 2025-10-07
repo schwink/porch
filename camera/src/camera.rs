@@ -1,11 +1,15 @@
 use std::sync::{Arc, Weak};
 
+use opencv::prelude::*;
+
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Frame {
     pub timestamp: chrono::DateTime<chrono::Local>,
     pub jpeg: Arc<[u8]>,
+    pub average_hash: String,
+    pub p_hash: String,
 }
 
 /**
@@ -188,12 +192,13 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
             return;
         }
     };
+    let rgb_slice: &[u8] = &rgb.to_bytes();
 
     let image = turbojpeg::Image {
         format: turbojpeg::PixelFormat::RGB,
         height: frame.height() as usize,
         width: frame.width() as usize,
-        pixels: rgb.to_bytes(),
+        pixels: rgb_slice,
         pitch: (frame.width() * 3) as usize,
     };
 
@@ -207,10 +212,59 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
 
     let jpeg_slice: &[u8] = &jpeg;
     let jpeg_buffer: Arc<[u8]> = Arc::from(jpeg_slice);
+
+    let mat = match opencv::prelude::Mat::new_rows_cols_with_bytes::<u8>(
+        frame.height() as i32,
+        frame.width() as i32 * 3,
+        rgb_slice,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to create opencv Mat from RGB data {}", e);
+            return;
+        }
+    };
+    if let Err(e) = opencv::imgproc::cvt_color(
+        &mat,
+        &mut mat.clone_pointee(),
+        opencv::imgproc::COLOR_RGB2BGR,
+        0,
+        // hint parameter added in opencv v4.11
+        // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    ) {
+        eprintln!("Failed to convert RGB to BGR: {:?}", e);
+        return;
+    };
+
+    let Ok(average_hash) = opencv::img_hash::AverageHash::create().and_then(|mut hasher| {
+        let mut hash = opencv::core::Mat::default();
+        hasher.compute(&mat, &mut hash)?;
+        Ok(hash)
+    }) else {
+        eprintln!("Failed to compute average hash");
+        return;
+    };
+
+    let Ok(p_hash) = opencv::img_hash::PHash::create().and_then(|mut hasher| {
+        let mut hash = opencv::core::Mat::default();
+        hasher.compute(&mat, &mut hash)?;
+        Ok(hash)
+    }) else {
+        eprintln!("Failed to compute p hash");
+        return;
+    };
+
     let frame = Frame {
         timestamp,
         jpeg: jpeg_buffer,
+        average_hash: hash_to_hex_string(&average_hash),
+        p_hash: hash_to_hex_string(&p_hash),
     };
+
+    println!(
+        "Frame at {} has average_hash={}, phash={}",
+        timestamp, frame.average_hash, frame.p_hash,
+    );
 
     let num_subscribers = match tx.send(frame) {
         Ok(n) => n - 1, // Don't count the service's copy of the receiver
@@ -237,4 +291,13 @@ impl Drop for StreamHandle {
     fn drop(&mut self) {
         self.service.stop();
     }
+}
+
+fn hash_to_hex_string(hash: &opencv::core::Mat) -> String {
+    let mut s = String::with_capacity(16);
+    for i in 0..hash.total() {
+        let v = hash.at::<u8>(i as i32).unwrap_or(&0);
+        s.push_str(&format!("{:02x}", v));
+    }
+    s
 }

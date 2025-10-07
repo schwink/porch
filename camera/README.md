@@ -13,6 +13,13 @@ In the project root directory,
 
 `brew install cmake`
 
+### opencv
+
+`brew install opencv`
+
+The current version in Homebrew is `v4.12`, while `v4.10` is available in `debian:stable-slim` in our Dockerfile. Unfortunately, `v4.11` changed the signature of `opencv::imgproc::cvt_color`.
+
+In the meantime, I am just commenting out the AlgoHint parameter when building for Docker.
 
 ## Architecture
 

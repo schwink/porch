@@ -7,14 +7,14 @@ COPY src ./src
 COPY vendor ./vendor
 
 RUN apt update
-RUN apt install -y clang cmake
+RUN apt install -y clang cmake libopencv-dev
 
 RUN cargo build --release
 
 FROM debian:stable-slim
 
 RUN apt update
-RUN apt install -y curl
+RUN apt install -y curl libopencv-contrib410
 RUN rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -4,9 +4,20 @@ use std::time::Duration;
 
 use clap::Parser;
 
+use serde::{Deserialize, Serialize};
+use serde_json::to_string_pretty;
+
 mod api;
 mod camera;
 mod webserver;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FrameMetadata {
+    name: String,
+    timestamp: i64,
+    average_hash: String,
+    p_hash: String,
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -57,10 +68,27 @@ async fn main() {
 
             let frame = handle.rx.recv().await.unwrap();
 
-            let filename = frame.timestamp.format(api::FILE_NAME_FORMAT).to_string();
-            let path = image_storage_dir.join(filename);
+            let filename = api::time_to_file_basename(frame.timestamp);
+            let mut path = image_storage_dir.join(&filename);
+            path.set_extension("jpg");
 
             match tokio::fs::write(&path, frame.jpeg).await {
+                Ok(()) => println!("Wrote {:?}", path),
+                Err(e) => {
+                    eprintln!("Failed to write path {:?}: {:?}", path, e);
+                }
+            };
+
+            let frame_metadata = FrameMetadata {
+                name: filename,
+                timestamp: frame.timestamp.timestamp_millis(),
+                average_hash: frame.average_hash,
+                p_hash: frame.p_hash,
+            };
+            let frame_metadata_json = to_string_pretty(&frame_metadata).unwrap();
+
+            path.set_extension("json");
+            match tokio::fs::write(&path, frame_metadata_json).await {
                 Ok(()) => println!("Wrote {:?}", path),
                 Err(e) => {
                     eprintln!("Failed to write path {:?}: {:?}", path, e);
