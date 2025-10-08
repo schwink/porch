@@ -1,12 +1,15 @@
 use std::{path::PathBuf, sync::Arc};
 
-use chrono::{DateTime, Local, TimeZone};
+use chrono::{DateTime, TimeZone};
+use futures::{StreamExt, stream::FuturesOrdered};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
     name: String,
     timestamp: i64,
+    average_hash: String,
+    p_hash: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -41,16 +44,6 @@ where
     <Tz as TimeZone>::Offset: std::fmt::Display,
 {
     time.format(FILE_NAME_FORMAT).to_string()
-}
-
-pub fn file_name_to_timestamp_ms(file_name: &str) -> i64 {
-    let mut path = PathBuf::from(file_name);
-    path.set_extension("");
-
-    match DateTime::parse_from_str(path.to_str().unwrap(), FILE_NAME_FORMAT) {
-        Ok(t) => t.timestamp_millis(),
-        Err(_) => DateTime::<Local>::default().timestamp_millis(),
-    }
 }
 
 impl Api {
@@ -130,21 +123,53 @@ impl Api {
                 }
             }
         };
+        entries.truncate(size);
+
         let frames: Vec<Frame> = entries
             .into_iter()
-            .take(size)
-            .map(|e| {
+            .map(async |e| -> Result<Frame, ()> {
                 // We know from above that the file name is valid UTF-8, i.e. can be a String
-                let file_name = e.file_name().into_string().unwrap();
+                let jpg_file_name = e.file_name().into_string().unwrap();
 
-                let timestamp_ms: i64 = file_name_to_timestamp_ms(file_name.as_str());
+                let mut json_file_path = e.path();
+                json_file_path.set_extension("json");
 
-                return Frame {
-                    name: file_name,
-                    timestamp: timestamp_ms,
+                let serialized = match tokio::fs::read(json_file_path).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to load metadata file for {:?}: {:?}",
+                            jpg_file_name, e
+                        );
+                        return Err(());
+                    }
                 };
+                let metadata: crate::FrameMetadata = match serde_json::from_slice(&serialized) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to parse metadata file for {:?}: {:?}",
+                            jpg_file_name, e
+                        );
+                        return Err(());
+                    }
+                };
+
+                Ok(Frame {
+                    name: jpg_file_name,
+                    timestamp: metadata.timestamp,
+                    average_hash: metadata.average_hash,
+                    p_hash: metadata.p_hash,
+                })
             })
-            .collect();
+            // Collect into a FuturesUnordered to run the file reads in parallel
+            .collect::<FuturesOrdered<_>>()
+            // Discard frames that failed to load
+            .filter_map(|r| async move { r.ok() })
+            // Join the futures and collect into the result Vec
+            .collect()
+            .await;
+
         let start_cursor = frames.last().map(|f| f.name.clone());
         let end_cursor = frames.first().map(|f| f.name.clone());
 
@@ -164,22 +189,9 @@ mod tests {
     use chrono::Utc;
 
     #[test]
-    fn test_timestamp_file_name_parse() {
+    fn test_timestamp_file_name() {
         let dt = Utc.with_ymd_and_hms(2024, 6, 15, 12, 34, 56).unwrap();
         let file_name = time_to_file_basename(dt);
         assert_eq!(file_name, "2024-06-15_12-34-56-000_+0000");
-
-        let timestamp_ms = file_name_to_timestamp_ms("2024-06-15_12-34-56-000_+0000.jpg");
-        assert_eq!(timestamp_ms, dt.timestamp_millis());
-    }
-
-    #[test]
-    fn test_timestamp_file_name_parse_invalid() {
-        let invalid_file_name = "invalid_file_name.jpg";
-        let timestamp_ms = file_name_to_timestamp_ms(invalid_file_name);
-        assert_eq!(
-            timestamp_ms,
-            DateTime::<Local>::default().timestamp_millis()
-        );
     }
 }

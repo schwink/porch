@@ -13,10 +13,10 @@ mod webserver;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FrameMetadata {
-    name: String,
-    timestamp: i64,
-    average_hash: String,
-    p_hash: String,
+    pub name: String,
+    pub timestamp: i64,
+    pub average_hash: String,
+    pub p_hash: String,
 }
 
 #[derive(Parser)]
