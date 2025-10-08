@@ -134,7 +134,7 @@ impl Api {
                 let mut json_file_path = e.path();
                 json_file_path.set_extension("json");
 
-                let serialized = match tokio::fs::read(json_file_path).await {
+                let serialized_metadata = match tokio::fs::read(json_file_path).await {
                     Ok(s) => s,
                     Err(e) => {
                         eprintln!(
@@ -144,16 +144,17 @@ impl Api {
                         return Err(());
                     }
                 };
-                let metadata: crate::FrameMetadata = match serde_json::from_slice(&serialized) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to parse metadata file for {:?}: {:?}",
-                            jpg_file_name, e
-                        );
-                        return Err(());
-                    }
-                };
+                let metadata: crate::FrameMetadata =
+                    match serde_json::from_slice(&serialized_metadata) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to parse metadata file for {:?}: {:?}",
+                                jpg_file_name, e
+                            );
+                            return Err(());
+                        }
+                    };
 
                 Ok(Frame {
                     name: jpg_file_name,
