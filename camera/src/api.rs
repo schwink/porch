@@ -9,7 +9,9 @@ pub struct Frame {
     name: String,
     timestamp: i64,
     average_hash: String,
+    average_hash_distance: Option<u64>,
     p_hash: String,
+    p_hash_distance: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -160,7 +162,9 @@ impl Api {
                     name: jpg_file_name,
                     timestamp: metadata.timestamp,
                     average_hash: metadata.average_hash,
+                    average_hash_distance: metadata.average_hash_distance,
                     p_hash: metadata.p_hash,
+                    p_hash_distance: metadata.p_hash_distance,
                 })
             })
             // Collect into a FuturesUnordered to run the file reads in parallel

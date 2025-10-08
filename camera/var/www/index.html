@@ -50,10 +50,33 @@
       border-right: 1px solid darkgray;
     }
 
-    li.frame p {
-      margin-left: 16px;
+    li.frame div {
+      width: 100%;
+      margin: 16px;
       font-size: 1.2em;
-      width: fit-content;
+    }
+
+    li.frame table {
+      width: 100%;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin-bottom: 1em;
+    }
+
+    td {
+      padding: 8px 12px;
+      border: 1px solid #dfe2e5;
+      text-align: left;
+    }
+
+    tr:nth-child(even) {
+      background-color: #fcfcfc;
+    }
+
+    tr:hover {
+      background-color: #f0f0f0;
     }
   </style>
 </head>
@@ -98,7 +121,15 @@
     const FrameListItem = ({ frame } = props) => {
       return html`<li className="frame">
         <img src="frames/${frame.name}"></img>
-        <p>${new Date(frame.timestamp).toLocaleString()}</p>
+        <div>
+          <table>
+            <tr><td>Time:</td><td>${new Date(frame.timestamp).toLocaleString()}</td></tr>
+            <tr><td>Average Hash:</td><td><code>${frame.average_hash}</code></td></tr>
+            <tr><td>Average Hash Distance:</td><td><code>${frame.average_hash_distance}</code></td></tr>
+            <tr><td>Perceptual Hash:</td><td><code>${frame.p_hash}</code></td></tr>
+            <tr><td>Perceptual Hash Distance:</td><td><code>${frame.p_hash_distance}</code></td></tr>
+          </table>
+        </div>
       </li>`;
     };
     FrameListItem.propTypes = {
