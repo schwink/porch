@@ -7,6 +7,7 @@ edition = "2024"
 async-stream = "0.3.6"
 axum = { version = "0.8.4", features = ["macros"] }
 chrono = "0.4.42"
+chrono-tz = "0.10.4"
 clap = { version = "4.5.48", features = ["derive"] }
 cron = "0.15.0"
 futures = "0.3.31"

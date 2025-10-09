@@ -2,6 +2,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use chrono::{TimeZone, Utc};
+use chrono_tz::America;
 use clap::Parser;
 
 use serde::{Deserialize, Serialize};
@@ -60,7 +62,8 @@ async fn main() {
         watch_scheduled_camera(
             &camera_service,
             &image_storage_dir,
-            chrono::Local::now() + chrono::Duration::hours(1),
+            Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::hours(1),
+            America::Los_Angeles,
         )
         .await;
     }
@@ -69,13 +72,15 @@ async fn main() {
         // Every weekday at 7:00am, watch for two hours
         // Format is "sec min hour day month weekday year"
         let start_watching_cron_expression = "0 0 7 * * Mon,Tue,Wed,Thu,Fri *";
+        let timezone = America::Los_Angeles;
         let watch_duration = chrono::Duration::hours(2);
 
         let schedule = cron::Schedule::from_str(start_watching_cron_expression).unwrap();
-        for start_time in schedule.upcoming(chrono::Local) {
+        for start_time in schedule.upcoming(timezone) {
             let stop_time = start_time + watch_duration;
 
-            let start_timestamp_offset = start_time.timestamp() - chrono::Local::now().timestamp();
+            let start_timestamp_offset =
+                start_time.timestamp() - Utc::now().with_timezone(&timezone).timestamp();
             println!(
                 "Next scheduled camera start is at {} in {} seconds",
                 start_time, start_timestamp_offset
@@ -85,19 +90,23 @@ async fn main() {
                 tokio::time::sleep_until(tokio::time::Instant::now() + delay).await;
             }
 
-            watch_scheduled_camera(&camera_service, &image_storage_dir, stop_time).await;
+            watch_scheduled_camera(&camera_service, &image_storage_dir, stop_time, timezone).await;
         }
     });
 
     scheduled_watch_handle.await.unwrap();
 }
 
-async fn watch_scheduled_camera(
+async fn watch_scheduled_camera<Tz: TimeZone>(
     camera_service: &camera::CameraService,
     image_storage_dir: &PathBuf,
-    stop_time: chrono::DateTime<chrono::Local>,
+    stop_time: chrono::DateTime<Tz>,
+    timezone: Tz,
 ) {
-    println!("Starting scheduled camera at {}", chrono::Local::now());
+    println!(
+        "Starting scheduled camera at {:?}",
+        Utc::now().with_timezone(&timezone)
+    );
     let mut handle: camera::StreamHandle = camera_service.start().await;
 
     let mut prev_average_hash: Option<String> = None;
@@ -105,7 +114,7 @@ async fn watch_scheduled_camera(
 
     loop {
         if chrono::Local::now() >= stop_time {
-            println!("Stopping scheduled camera at {}", stop_time);
+            println!("Stopping scheduled camera at {:?}", stop_time);
             break;
         }
 
