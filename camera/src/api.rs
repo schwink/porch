@@ -40,7 +40,7 @@ pub struct Api {
 
 static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z";
 
-pub fn time_to_file_basename<Tz>(time: DateTime<Tz>) -> String
+pub fn time_to_file_basename<Tz>(time: &DateTime<Tz>) -> String
 where
     Tz: TimeZone,
     <Tz as TimeZone>::Offset: std::fmt::Display,
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_timestamp_file_name() {
         let dt = Utc.with_ymd_and_hms(2024, 6, 15, 12, 34, 56).unwrap();
-        let file_name = time_to_file_basename(dt);
+        let file_name = time_to_file_basename(&dt);
         assert_eq!(file_name, "2024-06-15_12-34-56-000_+0000");
     }
 }

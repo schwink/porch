@@ -3,10 +3,13 @@ use std::sync::{Arc, Weak};
 use log::{error, info, warn};
 use opencv::prelude::*;
 use tokio::sync::Mutex;
+use tracing::{Level, span};
+use tracing_chrome::ChromeLayerBuilder;
+use tracing_subscriber::{prelude::*, registry::Registry};
 
 #[derive(Clone)]
 pub struct Frame {
-    pub timestamp: chrono::DateTime<chrono::Local>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
     pub jpeg: Arc<[u8]>,
     pub average_hash: String,
     pub p_hash: String,
@@ -23,7 +26,7 @@ pub struct CameraService {
 }
 
 impl CameraService {
-    pub fn new() -> Arc<Self> {
+    pub fn new(trace_dir: Option<std::path::PathBuf>) -> Arc<Self> {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<StreamCommand>(10);
         let (frame_tx, frame_rx) = tokio::sync::broadcast::channel::<Frame>(1);
 
@@ -94,15 +97,22 @@ impl CameraService {
                             }
                         };
 
-                        let stream =
-                            match stream_handle.start_stream(stream_callback, frame_tx.clone()) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    warn!("Failed to start stream: {:?}", e);
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                                    continue 'initialization;
-                                }
-                            };
+                        let stream_callback_data = StreamCallbackData {
+                            tx: frame_tx.clone(),
+                            trace_dir: trace_dir.clone(),
+                            trace_subscriber_guard: None,
+                            trace_flush_guard: std::sync::Mutex::new(None),
+                        };
+                        let stream = match stream_handle
+                            .start_stream(stream_callback, stream_callback_data)
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!("Failed to start stream: {:?}", e);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                continue 'initialization;
+                            }
+                        };
 
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -180,92 +190,186 @@ async fn wait_for_state(
     }
 }
 
-fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Frame>) {
+struct StreamCallbackData {
+    tx: tokio::sync::broadcast::Sender<Frame>,
+    trace_dir: Option<std::path::PathBuf>,
+
+    // When subscriber_guard drops, the subscriber is removed from the thread
+    trace_subscriber_guard: Option<tracing::subscriber::DefaultGuard>,
+
+    // When chrome_guard drops, the log file is written
+    trace_flush_guard: std::sync::Mutex<Option<tracing_chrome::FlushGuard>>,
+}
+
+/**
+ * Install trace collection on the current thread, outputting JSON files that can be read as
+ * icicle charts by e.g. chrome://tracing/.
+ *
+ * The stream_callback occurs on a dedicated thread managed by UVC. We don't want to do too much
+ * work in this thread lest it become bogged down.
+ */
+fn install_tracing(data: &mut StreamCallbackData, timestamp: &chrono::DateTime<chrono::Utc>) {
+    if data.trace_dir.is_none() {
+        // Tracing not enabled
+        return;
+    }
+
+    if data.trace_subscriber_guard.is_some() {
+        // Already instrumented
+        println!("stream_callback is already instrumented");
+        return;
+    }
+
+    let trace_dir = data.trace_dir.as_ref().unwrap();
+
+    let mut trace_file = std::path::Path::join(
+        &trace_dir,
+        crate::api::time_to_file_basename::<chrono::Utc>(timestamp),
+    );
+    trace_file.set_extension("json");
+
+    let (chrome_layer, chrome_guard) = ChromeLayerBuilder::new().file(trace_file).build();
+
+    // Register the ChromeLayer with the tracing subscriber
+    let subscriber = Registry::default().with(chrome_layer);
+
+    let subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    data.trace_subscriber_guard = Some(subscriber_guard);
+    data.trace_flush_guard = std::sync::Mutex::new(Some(chrome_guard));
+
+    println!("stream_callback is now instrumented");
+}
+
+fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
     info!("Got a frame in format {:?}", frame.format());
+    let timestamp = chrono::Utc::now();
+    install_tracing(data, &timestamp);
 
-    let timestamp = chrono::Local::now();
+    let span = span!(Level::TRACE, "stream_callback");
+    let _enter = span.enter();
 
-    let rgb = match frame.to_rgb() {
-        Ok(f) => f,
-        Err(e) => {
-            error!("Failed to convert frame to RGB: {:?}", e);
-            return;
+    let rgb = {
+        let span = span!(Level::TRACE, "to_rgb");
+        let _enter = span.enter();
+
+        match frame.to_rgb() {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Failed to convert frame to RGB: {:?}", e);
+                return;
+            }
         }
     };
     let rgb_slice: &[u8] = &rgb.to_bytes();
 
-    let image = turbojpeg::Image {
-        format: turbojpeg::PixelFormat::RGB,
-        height: frame.height() as usize,
-        width: frame.width() as usize,
-        pixels: rgb_slice,
-        pitch: (frame.width() * 3) as usize,
+    let jpeg_buffer: Arc<[u8]> = {
+        let span = span!(Level::TRACE, "turbojpeg");
+        let _enter = span.enter();
+
+        let image = turbojpeg::Image {
+            format: turbojpeg::PixelFormat::RGB,
+            height: frame.height() as usize,
+            width: frame.width() as usize,
+            pixels: rgb_slice,
+            pitch: (frame.width() * 3) as usize,
+        };
+
+        let jpeg = match turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to compress frame to JPEG: {:?}", e);
+                return;
+            }
+        };
+
+        let jpeg_slice: &[u8] = &jpeg;
+
+        Arc::from(jpeg_slice)
     };
 
-    let jpeg = match turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2) {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Failed to compress frame to JPEG: {:?}", e);
+    let mat = {
+        let span = span!(Level::TRACE, "opencv_mat");
+        let _enter = span.enter();
+
+        let mat = match opencv::prelude::Mat::new_rows_cols_with_bytes::<u8>(
+            frame.height() as i32,
+            frame.width() as i32 * 3,
+            rgb_slice,
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create opencv Mat from RGB data {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = opencv::imgproc::cvt_color(
+            &mat,
+            &mut mat.clone_pointee(),
+            opencv::imgproc::COLOR_RGB2BGR,
+            0,
+            // hint parameter added in opencv v4.11
+            // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+        ) {
+            error!("Failed to convert RGB to BGR: {:?}", e);
             return;
+        };
+
+        mat
+    };
+
+    let average_hash = {
+        let span = span!(Level::TRACE, "opencv_average_hash");
+        let _enter = span.enter();
+
+        match opencv::img_hash::AverageHash::create().and_then(|mut hasher| {
+            let mut hash = opencv::core::Mat::default();
+            hasher.compute(&mat, &mut hash)?;
+            Ok(hash_to_hex_string(&hash))
+        }) {
+            Ok(h) => h,
+            Err(e) => {
+                error!("Failed to compute average hash: {}", e);
+                return;
+            }
         }
     };
 
-    let jpeg_slice: &[u8] = &jpeg;
-    let jpeg_buffer: Arc<[u8]> = Arc::from(jpeg_slice);
+    let p_hash = {
+        let span: span::Span = span!(Level::TRACE, "opencv_p_hash");
+        let _enter = span.enter();
 
-    let mat = match opencv::prelude::Mat::new_rows_cols_with_bytes::<u8>(
-        frame.height() as i32,
-        frame.width() as i32 * 3,
-        rgb_slice,
-    ) {
-        Ok(m) => m,
-        Err(e) => {
-            error!("Failed to create opencv Mat from RGB data {}", e);
-            return;
+        match opencv::img_hash::PHash::create().and_then(|mut hasher| {
+            let mut hash = opencv::core::Mat::default();
+            hasher.compute(&mat, &mut hash)?;
+            Ok(hash_to_hex_string(&hash))
+        }) {
+            Ok(h) => h,
+            Err(e) => {
+                error!("Failed to compute p hash: {}", e);
+                return;
+            }
         }
     };
-    if let Err(e) = opencv::imgproc::cvt_color(
-        &mat,
-        &mut mat.clone_pointee(),
-        opencv::imgproc::COLOR_RGB2BGR,
-        0,
-        // hint parameter added in opencv v4.11
-        // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    ) {
-        error!("Failed to convert RGB to BGR: {:?}", e);
-        return;
-    };
 
-    let Ok(average_hash) = opencv::img_hash::AverageHash::create().and_then(|mut hasher| {
-        let mut hash = opencv::core::Mat::default();
-        hasher.compute(&mat, &mut hash)?;
-        Ok(hash)
-    }) else {
-        error!("Failed to compute average hash");
-        return;
-    };
+    {
+        let span: span::Span = span!(Level::TRACE, "send");
+        let _enter = span.enter();
 
-    let Ok(p_hash) = opencv::img_hash::PHash::create().and_then(|mut hasher| {
-        let mut hash = opencv::core::Mat::default();
-        hasher.compute(&mat, &mut hash)?;
-        Ok(hash)
-    }) else {
-        error!("Failed to compute p hash");
-        return;
-    };
+        let frame = Frame {
+            timestamp,
+            jpeg: jpeg_buffer,
+            average_hash: average_hash,
+            p_hash: p_hash,
+        };
 
-    let frame = Frame {
-        timestamp,
-        jpeg: jpeg_buffer,
-        average_hash: hash_to_hex_string(&average_hash),
-        p_hash: hash_to_hex_string(&p_hash),
-    };
-
-    let num_subscribers = match tx.send(frame) {
-        Ok(n) => n - 1, // Don't count the service's copy of the receiver
-        Err(_) => 0,
-    };
-    info!("Broadcasted a frame to {} subscribers", num_subscribers)
+        let num_subscribers = match data.tx.send(frame) {
+            Ok(n) => n - 1, // Don't count the service's copy of the receiver
+            Err(_) => 0,
+        };
+        info!("Broadcasted a frame to {} subscribers", num_subscribers)
+    }
 }
 
 #[derive(PartialEq, Eq)]

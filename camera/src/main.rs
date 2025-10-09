@@ -51,8 +51,8 @@ async fn main() {
         simplelog::TerminalMode::Mixed,
         simplelog::ColorChoice::Auto,
     )];
-    if let Some(log_dir) = cli.log_dir {
-        match tokio::fs::create_dir_all(&log_dir).await {
+    if let Some(log_dir) = &cli.log_dir {
+        match tokio::fs::create_dir_all(log_dir).await {
             Ok(_) => {
                 let log_path = log_dir.join("porch.log");
                 if let Ok(log_file) = std::fs::File::create(&log_path) {
@@ -85,7 +85,7 @@ async fn main() {
         _ => (),
     };
 
-    let camera_service = camera::CameraService::new();
+    let camera_service = camera::CameraService::new(cli.log_dir);
 
     let api = api::Api::new(image_storage_dir.clone());
 
@@ -181,7 +181,7 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
             }
         }
 
-        let filename = api::time_to_file_basename(frame.timestamp);
+        let filename = api::time_to_file_basename(&frame.timestamp);
         let mut path = image_storage_dir.join(&filename);
         path.set_extension("jpg");
 
