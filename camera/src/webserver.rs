@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, get_service},
 };
+use log::info;
 use std::{convert::Infallible, path::PathBuf};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::services::ServeDir;
@@ -59,7 +60,7 @@ impl WebServer {
 
             let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            println!("listening on {}", addr);
+            info!("listening on {}", addr);
             axum::serve(listener, app).await.unwrap();
         });
 

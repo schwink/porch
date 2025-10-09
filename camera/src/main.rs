@@ -5,7 +5,8 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use chrono_tz::America;
 use clap::Parser;
-
+use log::LevelFilter;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 
@@ -29,12 +30,49 @@ struct Cli {
     image_storage_dir: PathBuf,
 
     #[arg(long)]
+    log_dir: Option<PathBuf>,
+
+    #[arg(long)]
     start_watching_immediately: bool,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let cli = Cli::parse();
+
+    let simplelog_config = simplelog::ConfigBuilder::new()
+        .set_thread_level(LevelFilter::Error)
+        .set_thread_mode(simplelog::ThreadLogMode::Both)
+        .set_location_level(LevelFilter::Error)
+        .build();
+    let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![simplelog::TermLogger::new(
+        LevelFilter::Info,
+        simplelog_config.clone(),
+        simplelog::TerminalMode::Mixed,
+        simplelog::ColorChoice::Auto,
+    )];
+    if let Some(log_dir) = cli.log_dir {
+        match tokio::fs::create_dir_all(&log_dir).await {
+            Ok(_) => {
+                let log_path = log_dir.join("porch.log");
+                if let Ok(log_file) = std::fs::File::create(&log_path) {
+                    println!("Logging to {:?}", log_path);
+                    loggers.push(simplelog::WriteLogger::new(
+                        LevelFilter::Debug,
+                        simplelog_config,
+                        log_file,
+                    ));
+                } else {
+                    eprintln!("Unable to create log file {:?}", log_path);
+                }
+            }
+            Err(e) => {
+                eprintln!("Unable to create log directory {:?}: {:?}", log_dir, e);
+            }
+        }
+    }
+
+    simplelog::CombinedLogger::init(loggers).unwrap();
 
     let image_storage_dir: PathBuf = cli.image_storage_dir;
     match tokio::fs::create_dir_all(image_storage_dir.as_path()).await {
@@ -81,7 +119,7 @@ async fn main() {
 
             let start_timestamp_offset =
                 start_time.timestamp() - Utc::now().with_timezone(&timezone).timestamp();
-            println!(
+            info!(
                 "Next scheduled camera start is at {} in {} seconds",
                 start_time, start_timestamp_offset
             );
@@ -103,7 +141,7 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
     stop_time: chrono::DateTime<Tz>,
     timezone: Tz,
 ) {
-    println!(
+    info!(
         "Starting scheduled camera at {:?}",
         Utc::now().with_timezone(&timezone)
     );
@@ -114,7 +152,7 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
 
     loop {
         if chrono::Local::now() >= stop_time {
-            println!("Stopping scheduled camera at {:?}", stop_time);
+            info!("Stopping scheduled camera at {:?}", stop_time);
             break;
         }
 
@@ -129,12 +167,12 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
         prev_p_hash = Some(frame.p_hash.clone());
 
         if let Some(distance) = average_hash_distance {
-            println!("average hash distance is {}", distance);
+            info!("average hash distance is {}", distance);
         }
         if let Some(distance) = p_hash_distance {
-            println!("p hash distance is {}", distance);
+            info!("p hash distance is {}", distance);
             if distance < 25 {
-                println!(
+                info!(
                     "Skipping frame at {} due to low p hash distance of {}",
                     frame.timestamp, distance
                 );
@@ -148,9 +186,9 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
         path.set_extension("jpg");
 
         match tokio::fs::write(&path, frame.jpeg).await {
-            Ok(()) => println!("Wrote {:?}", path),
+            Ok(()) => info!("Wrote {:?}", path),
             Err(e) => {
-                eprintln!("Failed to write path {:?}: {:?}", path, e);
+                error!("Failed to write path {:?}: {:?}", path, e);
             }
         };
 
@@ -166,9 +204,9 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
 
         path.set_extension("json");
         match tokio::fs::write(&path, frame_metadata_json).await {
-            Ok(()) => println!("Wrote {:?}", path),
+            Ok(()) => info!("Wrote {:?}", path),
             Err(e) => {
-                eprintln!("Failed to write path {:?}: {:?}", path, e);
+                error!("Failed to write path {:?}: {:?}", path, e);
             }
         };
     }

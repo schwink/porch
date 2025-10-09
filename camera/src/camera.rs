@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak};
 
+use log::{error, info, warn};
 use opencv::prelude::*;
-
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -38,7 +38,7 @@ impl CameraService {
                 let context = match uvc::Context::new() {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("Failed to get uvc context: {:?}", e);
+                        warn!("Failed to get uvc context: {:?}", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         continue 'initialization;
                     }
@@ -47,7 +47,7 @@ impl CameraService {
                 let devices = match context.devices() {
                     Ok(d) => d,
                     Err(e) => {
-                        eprintln!("Failed to enumerate uvc devices: {:?}", e);
+                        warn!("Failed to enumerate uvc devices: {:?}", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         continue 'initialization;
                     }
@@ -56,7 +56,7 @@ impl CameraService {
                 let device = match devices.last() {
                     Some(d) => d,
                     None => {
-                        eprintln!("No uvc devices found");
+                        warn!("No uvc devices found");
                         tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                         continue 'initialization;
                     }
@@ -67,7 +67,7 @@ impl CameraService {
                 let device_handle = match device.open() {
                     Ok(handle) => handle,
                     Err(e) => {
-                        eprintln!("Failed to open device: {:?}", e);
+                        warn!("Failed to open device: {:?}", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         continue 'initialization;
                     }
@@ -77,7 +77,7 @@ impl CameraService {
 
                 loop {
                     {
-                        println!("Starting the camera");
+                        info!("Starting the camera");
 
                         let mut stream_handle = match device_handle
                             .get_stream_handle_with_format_size_and_fps(
@@ -88,7 +88,7 @@ impl CameraService {
                             ) {
                             Ok(handle) => handle,
                             Err(e) => {
-                                eprintln!("Failed to get stream handle: {:?}", e);
+                                warn!("Failed to get stream handle: {:?}", e);
                                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                                 continue 'initialization;
                             }
@@ -98,7 +98,7 @@ impl CameraService {
                             match stream_handle.start_stream(stream_callback, frame_tx.clone()) {
                                 Ok(s) => s,
                                 Err(e) => {
-                                    eprintln!("Failed to start stream: {:?}", e);
+                                    warn!("Failed to start stream: {:?}", e);
                                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                                     continue 'initialization;
                                 }
@@ -109,7 +109,7 @@ impl CameraService {
                         // Wait for Stop command
                         wait_for_state(StreamCommand::Stop, &mut state, &mut cmd_rx).await;
 
-                        println!("Stopping the camera");
+                        info!("Stopping the camera");
 
                         stream.stop();
 
@@ -131,7 +131,7 @@ impl CameraService {
     }
 
     pub async fn start(&self) -> StreamHandle {
-        println!("CameraService::start");
+        info!("CameraService::start");
 
         let mut subscriber_count = self.subscriber_count.lock().await;
         *subscriber_count += 1;
@@ -147,7 +147,7 @@ impl CameraService {
     }
 
     fn stop(&self) {
-        println!("CameraService::stop");
+        info!("CameraService::stop");
 
         let mut subscriber_count = self.subscriber_count.try_lock().unwrap();
         *subscriber_count -= 1;
@@ -181,14 +181,14 @@ async fn wait_for_state(
 }
 
 fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<Frame>) {
-    println!("Got a frame in format {:?}", frame.format());
+    info!("Got a frame in format {:?}", frame.format());
 
     let timestamp = chrono::Local::now();
 
     let rgb = match frame.to_rgb() {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("Failed to convert frame to RGB: {:?}", e);
+            error!("Failed to convert frame to RGB: {:?}", e);
             return;
         }
     };
@@ -205,7 +205,7 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
     let jpeg = match turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("Failed to compress frame to JPEG: {:?}", e);
+            error!("Failed to compress frame to JPEG: {:?}", e);
             return;
         }
     };
@@ -220,7 +220,7 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
     ) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("Failed to create opencv Mat from RGB data {}", e);
+            error!("Failed to create opencv Mat from RGB data {}", e);
             return;
         }
     };
@@ -232,7 +232,7 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
         // hint parameter added in opencv v4.11
         // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
     ) {
-        eprintln!("Failed to convert RGB to BGR: {:?}", e);
+        error!("Failed to convert RGB to BGR: {:?}", e);
         return;
     };
 
@@ -241,7 +241,7 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
         hasher.compute(&mat, &mut hash)?;
         Ok(hash)
     }) else {
-        eprintln!("Failed to compute average hash");
+        error!("Failed to compute average hash");
         return;
     };
 
@@ -250,7 +250,7 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
         hasher.compute(&mat, &mut hash)?;
         Ok(hash)
     }) else {
-        eprintln!("Failed to compute p hash");
+        error!("Failed to compute p hash");
         return;
     };
 
@@ -261,16 +261,11 @@ fn stream_callback(frame: &uvc::Frame, tx: &mut tokio::sync::broadcast::Sender<F
         p_hash: hash_to_hex_string(&p_hash),
     };
 
-    println!(
-        "Frame at {} has average_hash={}, phash={}",
-        timestamp, frame.average_hash, frame.p_hash,
-    );
-
     let num_subscribers = match tx.send(frame) {
         Ok(n) => n - 1, // Don't count the service's copy of the receiver
         Err(_) => 0,
     };
-    println!("Broadcasted a frame to {} subscribers", num_subscribers)
+    info!("Broadcasted a frame to {} subscribers", num_subscribers)
 }
 
 #[derive(PartialEq, Eq)]
