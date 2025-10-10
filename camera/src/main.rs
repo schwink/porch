@@ -171,7 +171,7 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
         }
         if let Some(distance) = p_hash_distance {
             info!("p hash distance is {}", distance);
-            if distance < 25 {
+            if distance < 10 {
                 info!(
                     "Skipping frame at {} due to low p hash distance of {}",
                     frame.timestamp, distance
