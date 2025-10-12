@@ -18,8 +18,6 @@ mod webserver;
 pub struct FrameMetadata {
     pub name: String,
     pub timestamp: i64,
-    pub average_hash: String,
-    pub average_hash_distance: Option<u64>,
     pub p_hash: String,
     pub p_hash_distance: Option<u64>,
 }
@@ -147,7 +145,6 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
     );
     let mut handle: camera::StreamHandle = camera_service.start().await;
 
-    let mut prev_average_hash: Option<String> = None;
     let mut prev_p_hash: Option<String> = None;
 
     loop {
@@ -158,17 +155,10 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
 
         let frame = handle.rx.recv().await.unwrap();
 
-        let average_hash_distance = prev_average_hash
-            .map(|a| hamming::distance(a.as_bytes(), &frame.average_hash.as_bytes()));
-        prev_average_hash = Some(frame.average_hash.clone());
-
         let p_hash_distance =
             prev_p_hash.map(|p| hamming::distance(p.as_bytes(), &frame.p_hash.as_bytes()));
         prev_p_hash = Some(frame.p_hash.clone());
 
-        if let Some(distance) = average_hash_distance {
-            info!("average hash distance is {}", distance);
-        }
         if let Some(distance) = p_hash_distance {
             info!("p hash distance is {}", distance);
             if distance < 10 {
@@ -195,8 +185,6 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
         let frame_metadata = FrameMetadata {
             name: filename,
             timestamp: frame.timestamp.timestamp_millis(),
-            average_hash: frame.average_hash,
-            average_hash_distance,
             p_hash: frame.p_hash,
             p_hash_distance,
         };

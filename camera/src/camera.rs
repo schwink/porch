@@ -11,7 +11,6 @@ use tracing_subscriber::{prelude::*, registry::Registry};
 pub struct Frame {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub jpeg: Arc<[u8]>,
-    pub average_hash: String,
     pub p_hash: String,
 }
 
@@ -319,23 +318,6 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         mat
     };
 
-    let average_hash = {
-        let span = span!(Level::TRACE, "opencv_average_hash");
-        let _enter = span.enter();
-
-        match opencv::img_hash::AverageHash::create().and_then(|mut hasher| {
-            let mut hash = opencv::core::Mat::default();
-            hasher.compute(&mat, &mut hash)?;
-            Ok(hash_to_hex_string(&hash))
-        }) {
-            Ok(h) => h,
-            Err(e) => {
-                error!("Failed to compute average hash: {}", e);
-                return;
-            }
-        }
-    };
-
     let p_hash = {
         let span: span::Span = span!(Level::TRACE, "opencv_p_hash");
         let _enter = span.enter();
@@ -360,7 +342,6 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         let frame = Frame {
             timestamp,
             jpeg: jpeg_buffer,
-            average_hash: average_hash,
             p_hash: p_hash,
         };
 
