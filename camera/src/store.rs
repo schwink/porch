@@ -2,10 +2,12 @@ use std::{path::Path, sync::Arc};
 
 use futures::{StreamExt, stream::FuturesOrdered};
 
+use log::{error, info};
 use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FrameMetadata {
@@ -18,12 +20,18 @@ pub struct FrameMetadata {
 
 pub struct FrameStore {
     pub image_storage_dir: Box<Path>,
+    frame_tx: broadcast::Sender<FrameMetadata>,
+    pub frame_rx: broadcast::Receiver<FrameMetadata>,
 }
 
 impl FrameStore {
     pub fn new(image_storage_dir: &Path) -> Arc<FrameStore> {
+        let (frame_tx, frame_rx) = broadcast::channel::<FrameMetadata>(32);
+
         Arc::new(FrameStore {
             image_storage_dir: Box::from(image_storage_dir),
+            frame_tx: frame_tx,
+            frame_rx: frame_rx,
         })
     }
 
@@ -56,6 +64,10 @@ impl FrameStore {
 
         path.set_extension("json");
         tokio::fs::write(&path, frame_metadata_json).await?;
+
+        if let Ok(n) = self.frame_tx.send(frame_metadata.clone()) {
+            info!("Broadcast new frame to {} subscribers", n);
+        }
 
         Ok(frame_metadata)
     }
@@ -116,7 +128,7 @@ impl FrameStore {
                 let serialized_metadata = match tokio::fs::read(json_file_path).await {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!(
+                        error!(
                             "Failed to load metadata file for {:?}: {:?}",
                             jpg_file_name, e
                         );
@@ -126,7 +138,7 @@ impl FrameStore {
                 Ok(match serde_json::from_slice(&serialized_metadata) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!(
+                        error!(
                             "Failed to parse metadata file for {:?}: {:?}",
                             jpg_file_name, e
                         );

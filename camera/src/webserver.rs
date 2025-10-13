@@ -1,28 +1,31 @@
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 use crate::camera::StreamHandle;
-use async_stream::stream;
+use async_stream::{stream, try_stream};
 use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, Sse},
     routing::{get, get_service},
 };
 use log::info;
-use std::{convert::Infallible, path::Path};
+use std::{convert::Infallible, path::Path, time::Duration};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::services::ServeDir;
 
 use crate::api::Api;
 use crate::camera::CameraService;
+use crate::store::FrameStore;
 
 #[derive(Clone)]
 struct WebServerState {
     camera_service: Arc<CameraService>,
     api: Arc<Api>,
+    frame_store: Arc<FrameStore>,
 }
 
 pub struct WebServer {
@@ -38,12 +41,14 @@ impl WebServer {
     pub async fn new(
         camera_service: Arc<CameraService>,
         api: Arc<Api>,
+        frame_store: Arc<FrameStore>,
         image_storage_dir: Box<Path>,
     ) -> Self {
         let handle = tokio::task::spawn(async move {
             let state = WebServerState {
                 camera_service,
                 api,
+                frame_store,
             };
 
             let static_file_service = get_service(ServeDir::new("var/www"));
@@ -54,6 +59,7 @@ impl WebServer {
                 .fallback_service(static_file_service)
                 .nest_service("/frames", images_static_file_service)
                 .route("/api/frames", get(api_frames))
+                .route("/api/frames/latest", get(api_frames_latest))
                 .route("/live.mjpeg", get(live))
                 .route("/peek.mjpeg", get(peek))
                 .with_state(state.clone());
@@ -150,4 +156,29 @@ async fn api_frames(
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err(e) => (e.code, Json(ApiErrorData { message: e.message })).into_response(),
     }
+}
+
+async fn api_frames_latest(
+    State(state): State<WebServerState>,
+) -> Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>> {
+    let mut rx = state.frame_store.frame_rx.resubscribe();
+
+    Sse::new(try_stream! {
+        while let Ok(metadata) = rx.recv().await {
+            let frame = crate::api::Frame {
+                    name: metadata.src,
+                    timestamp: metadata.timestamp,
+                    p_hash: metadata.p_hash,
+                    p_hash_distance: metadata.p_hash_distance,
+                };
+            let edge = crate::api::FrameEdge {
+                node: frame,
+                cursor: metadata.name,
+            };
+            let json = serde_json::to_string(&edge).unwrap();
+            let event = axum::response::sse::Event::default().data(json);
+            yield event;
+        }
+    })
+    .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(1)))
 }

@@ -83,6 +83,7 @@ async fn main() {
     let _webserver = webserver::WebServer::new(
         camera_service.clone(),
         api.clone(),
+        frame_store.clone(),
         Box::from(image_storage_dir.as_path()),
     )
     .await;

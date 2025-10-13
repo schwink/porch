@@ -140,6 +140,7 @@
       const [isLoading, setIsLoading] = React.useState(true);
       const [isFetching, setIsFetching] = React.useState(false);
       const [startCursor, setStartCursor] = React.useState(null);
+      const [endCursor, setEndCursor] = React.useState(null);
       const [hasPreviousPage, setHasPreviousPage] = React.useState(true);
       const [error, setError] = React.useState(false);
 
@@ -185,10 +186,48 @@
         }
       };
 
+      // Fetch initial page of frames
       React.useEffect(() => {
         fetchData();
       }, []);
 
+      // Subscribe to newer frames as they are captured
+      React.useEffect(() => {
+        if (isLoading) {
+          return;
+        }
+
+        const eventSource = new EventSource('api/frames/latest');
+
+        eventSource.onopen = () => {
+          console.log('SSE connection opened.');
+        };
+
+        eventSource.onmessage = (event) => {
+          console.log('Received message:', event.data);
+
+          const newFrame = JSON.parse(event.data).node;
+          if (newFrame) {
+            setFrames(frames => {
+              const newFrames = [newFrame, ...frames];
+              newFrames.sort((a, b) => b.timestamp - a.timestamp);
+              return newFrames;
+            });
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('SSE error:', error);
+          eventSource.close(); // Close on error
+        };
+
+        return () => {
+          eventSource.close(); // Cleanup: Close connection on component unmount
+          console.log('SSE connection closed.');
+        };
+      }, [isLoading]);
+
+      // Fetch older frames on scroll down
       React.useEffect(() => {
         const current = scrollContainerRef.current;
         current?.addEventListener('scroll', onScroll);

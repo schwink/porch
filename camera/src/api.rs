@@ -7,10 +7,16 @@ use crate::store;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
-    name: String,
-    timestamp: i64,
-    p_hash: String,
-    p_hash_distance: Option<u64>,
+    pub name: String,
+    pub timestamp: i64,
+    pub p_hash: String,
+    pub p_hash_distance: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FrameEdge {
+    pub node: Frame,
+    pub cursor: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
