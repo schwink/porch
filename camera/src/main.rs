@@ -1,15 +1,18 @@
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use chrono_tz::America;
 use clap::Parser;
-use log::LevelFilter;
-use log::{error, info};
+use log::{LevelFilter, info};
+
+use crate::controller::scheduled::ScheduledCapture;
 
 mod api;
 mod camera;
+mod controller;
 mod pipeline;
 mod webserver;
 
@@ -63,8 +66,8 @@ async fn main() {
 
     simplelog::CombinedLogger::init(loggers).unwrap();
 
-    let image_storage_dir: PathBuf = cli.image_storage_dir;
-    match tokio::fs::create_dir_all(image_storage_dir.as_path()).await {
+    let image_storage_dir: Arc<Path> = Arc::from(cli.image_storage_dir);
+    match tokio::fs::create_dir_all(image_storage_dir.clone()).await {
         Err(e) => {
             panic!(
                 "Unable to create image storage path {:?}: {:?}",
@@ -86,87 +89,38 @@ async fn main() {
     .await;
 
     if cli.start_watching_immediately {
-        watch_scheduled_camera(
+        controller::capture::start_capture(
             &camera_service,
-            &image_storage_dir,
+            image_storage_dir.clone(),
             Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::hours(1),
             America::Los_Angeles,
         )
-        .await;
+        .await
+        .unwrap();
     }
 
-    let scheduled_watch_handle = tokio::spawn(async move {
-        // Every weekday at 7:00am, watch for two hours
-        // Format is "sec min hour day month weekday year"
-        let start_watching_cron_expression = "0 0 7 * * Mon,Tue,Wed,Thu,Fri *";
-        let timezone = America::Los_Angeles;
-        let watch_duration = chrono::Duration::hours(2);
+    let weekday_mornings = &mut ScheduledCapture::start_with_cron(
+        camera_service.clone(),
+        image_storage_dir.clone(),
+        // Every weekday at 7:00am, watch for three hours
+        "0 0 7 * * Mon,Tue,Wed,Thu,Fri *",
+        America::Los_Angeles,
+        chrono::Duration::hours(3),
+    )
+    .unwrap();
+    info!("Scheduled capture {}", weekday_mornings);
 
-        let schedule = cron::Schedule::from_str(start_watching_cron_expression).unwrap();
-        for start_time in schedule.upcoming(timezone) {
-            let stop_time = start_time + watch_duration;
+    let weekends = &mut ScheduledCapture::start_with_cron(
+        camera_service,
+        image_storage_dir,
+        // Every weekend at 7:00am, watch for six hours
+        "0 0 7 * * Sat,Sun *",
+        America::Los_Angeles,
+        chrono::Duration::hours(6),
+    )
+    .unwrap();
+    info!("Scheduled capture {}", weekends);
 
-            let start_timestamp_offset =
-                start_time.timestamp() - Utc::now().with_timezone(&timezone).timestamp();
-            info!(
-                "Next scheduled camera start is at {} in {} seconds",
-                start_time, start_timestamp_offset
-            );
-            if start_timestamp_offset > 0 {
-                let delay = Duration::from_secs(start_timestamp_offset.try_into().unwrap());
-                tokio::time::sleep_until(tokio::time::Instant::now() + delay).await;
-            }
-
-            watch_scheduled_camera(&camera_service, &image_storage_dir, stop_time, timezone).await;
-        }
-    });
-
-    scheduled_watch_handle.await.unwrap();
-}
-
-async fn watch_scheduled_camera<Tz: TimeZone>(
-    camera_service: &camera::CameraService,
-    image_storage_dir: &Path,
-    stop_time: chrono::DateTime<Tz>,
-    timezone: Tz,
-) {
-    info!(
-        "Starting scheduled camera at {:?}",
-        Utc::now().with_timezone(&timezone)
-    );
-    let mut handle: camera::StreamHandle = camera_service.start().await;
-
-    let mut prev_p_hash: Option<String> = None;
-
-    loop {
-        if chrono::Local::now() >= stop_time {
-            info!("Stopping scheduled camera at {:?}", stop_time);
-            break;
-        }
-
-        let frame = handle.rx.recv().await.unwrap();
-
-        let p_hash_distance =
-            prev_p_hash.map(|p| hamming::distance(p.as_bytes(), &frame.p_hash.as_bytes()));
-        prev_p_hash = Some(frame.p_hash.clone());
-
-        if let Some(distance) = p_hash_distance {
-            info!("p hash distance is {}", distance);
-            if distance < 10 {
-                info!(
-                    "Skipping frame at {} due to low p hash distance of {}",
-                    frame.timestamp, distance
-                );
-                // Skip duplicate frames
-                continue;
-            }
-        }
-
-        match pipeline::write_frame_capture_data(image_storage_dir, frame, p_hash_distance).await {
-            Ok(metadata) => info!("Persisted frame {}", metadata.name),
-            Err(e) => {
-                error!("Failed to persist frame: {:?}", e)
-            }
-        }
-    }
+    weekday_mornings.handle.get_mut().await.unwrap();
+    weekends.handle.get_mut().await.unwrap();
 }

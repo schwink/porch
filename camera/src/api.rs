@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use chrono::{DateTime, TimeZone};
 use futures::{StreamExt, stream::FuturesOrdered};
@@ -33,7 +33,7 @@ pub struct ApiError {
 }
 
 pub struct Api {
-    image_storage_dir: PathBuf,
+    image_storage_dir: Arc<Path>,
 }
 
 static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z";
@@ -47,7 +47,7 @@ where
 }
 
 impl Api {
-    pub fn new(image_storage_dir: PathBuf) -> Arc<Api> {
+    pub fn new(image_storage_dir: Arc<Path>) -> Arc<Api> {
         Arc::new(Api { image_storage_dir })
     }
 

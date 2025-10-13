@@ -12,7 +12,7 @@ use axum::{
     routing::{get, get_service},
 };
 use log::info;
-use std::{convert::Infallible, path::PathBuf};
+use std::{convert::Infallible, path::Path};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::services::ServeDir;
 
@@ -38,7 +38,7 @@ impl WebServer {
     pub async fn new(
         camera_service: Arc<CameraService>,
         api: Arc<Api>,
-        image_storage_dir: PathBuf,
+        image_storage_dir: Arc<Path>,
     ) -> Self {
         let handle = tokio::task::spawn(async move {
             let state = WebServerState {
