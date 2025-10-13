@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -7,20 +7,11 @@ use chrono_tz::America;
 use clap::Parser;
 use log::LevelFilter;
 use log::{error, info};
-use serde::{Deserialize, Serialize};
-use serde_json::to_string_pretty;
 
 mod api;
 mod camera;
+mod pipeline;
 mod webserver;
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct FrameMetadata {
-    pub name: String,
-    pub timestamp: i64,
-    pub p_hash: String,
-    pub p_hash_distance: Option<u64>,
-}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -135,7 +126,7 @@ async fn main() {
 
 async fn watch_scheduled_camera<Tz: TimeZone>(
     camera_service: &camera::CameraService,
-    image_storage_dir: &PathBuf,
+    image_storage_dir: &Path,
     stop_time: chrono::DateTime<Tz>,
     timezone: Tz,
 ) {
@@ -171,31 +162,11 @@ async fn watch_scheduled_camera<Tz: TimeZone>(
             }
         }
 
-        let filename = api::time_to_file_basename(&frame.timestamp);
-        let mut path = image_storage_dir.join(&filename);
-        path.set_extension("jpg");
-
-        match tokio::fs::write(&path, frame.jpeg).await {
-            Ok(()) => info!("Wrote {:?}", path),
+        match pipeline::write_frame_capture_data(image_storage_dir, frame, p_hash_distance).await {
+            Ok(metadata) => info!("Persisted frame {}", metadata.name),
             Err(e) => {
-                error!("Failed to write path {:?}: {:?}", path, e);
+                error!("Failed to persist frame: {:?}", e)
             }
-        };
-
-        let frame_metadata = FrameMetadata {
-            name: filename,
-            timestamp: frame.timestamp.timestamp_millis(),
-            p_hash: frame.p_hash,
-            p_hash_distance,
-        };
-        let frame_metadata_json = to_string_pretty(&frame_metadata).unwrap();
-
-        path.set_extension("json");
-        match tokio::fs::write(&path, frame_metadata_json).await {
-            Ok(()) => info!("Wrote {:?}", path),
-            Err(e) => {
-                error!("Failed to write path {:?}: {:?}", path, e);
-            }
-        };
+        }
     }
 }

@@ -144,7 +144,7 @@ impl Api {
                         return Err(());
                     }
                 };
-                let metadata: crate::FrameMetadata =
+                let metadata: crate::pipeline::FrameMetadata =
                     match serde_json::from_slice(&serialized_metadata) {
                         Ok(m) => m,
                         Err(e) => {
