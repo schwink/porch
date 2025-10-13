@@ -1,16 +1,14 @@
 use std::error::Error;
-use std::path::Path;
-use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use log::{error, info};
 
 use crate::camera;
-use crate::pipeline;
+use crate::store;
 
 pub async fn start_capture<Tz: TimeZone>(
     camera_service: &camera::CameraService,
-    image_storage_dir: Arc<Path>,
+    frame_store: &store::FrameStore,
     stop_time: chrono::DateTime<Tz>,
     timezone: Tz,
 ) -> Result<(), Box<dyn Error>> {
@@ -45,7 +43,8 @@ pub async fn start_capture<Tz: TimeZone>(
             }
         }
 
-        match pipeline::write_frame_capture_data(image_storage_dir.as_ref(), frame, p_hash_distance)
+        match frame_store
+            .write_frame_capture_data(frame, p_hash_distance)
             .await
         {
             Ok(metadata) => info!("Persisted frame {}", metadata.name),

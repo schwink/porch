@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +10,7 @@ use log::{error, info};
 
 use crate::camera;
 use crate::controller::capture;
+use crate::store;
 
 /**
  * Represents a recurring period of time in which the camera is woken up and frames are captured,
@@ -37,7 +37,7 @@ where
      */
     pub fn start_with_cron(
         camera_service: Arc<camera::CameraService>,
-        image_storage_dir: Arc<Path>,
+        frame_store: Arc<store::FrameStore>,
         start_watching_cron_expression: &str,
         timezone: Tz,
         duration: chrono::Duration,
@@ -61,8 +61,8 @@ where
                 }
 
                 if let Err(e) = capture::start_capture(
-                    &camera_service.clone(),
-                    image_storage_dir.clone(),
+                    &camera_service,
+                    &frame_store,
                     stop_time,
                     timezone.clone(),
                 )

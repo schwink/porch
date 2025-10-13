@@ -38,7 +38,7 @@ impl WebServer {
     pub async fn new(
         camera_service: Arc<CameraService>,
         api: Arc<Api>,
-        image_storage_dir: Arc<Path>,
+        image_storage_dir: Box<Path>,
     ) -> Self {
         let handle = tokio::task::spawn(async move {
             let state = WebServerState {

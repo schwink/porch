@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::PathBuf;
 
 use chrono::Utc;
 use chrono_tz::America;
@@ -13,7 +10,7 @@ use crate::controller::scheduled::ScheduledCapture;
 mod api;
 mod camera;
 mod controller;
-mod pipeline;
+mod store;
 mod webserver;
 
 #[derive(Parser)]
@@ -66,7 +63,7 @@ async fn main() {
 
     simplelog::CombinedLogger::init(loggers).unwrap();
 
-    let image_storage_dir: Arc<Path> = Arc::from(cli.image_storage_dir);
+    let image_storage_dir = cli.image_storage_dir;
     match tokio::fs::create_dir_all(image_storage_dir.clone()).await {
         Err(e) => {
             panic!(
@@ -77,21 +74,23 @@ async fn main() {
         _ => (),
     };
 
+    let frame_store = store::FrameStore::new(image_storage_dir.as_path());
+
     let camera_service = camera::CameraService::new(cli.log_dir);
 
-    let api = api::Api::new(image_storage_dir.clone());
+    let api = api::Api::new(frame_store.clone());
 
     let _webserver = webserver::WebServer::new(
         camera_service.clone(),
         api.clone(),
-        image_storage_dir.clone(),
+        Box::from(image_storage_dir.as_path()),
     )
     .await;
 
     if cli.start_watching_immediately {
         controller::capture::start_capture(
             &camera_service,
-            image_storage_dir.clone(),
+            &frame_store,
             Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::hours(1),
             America::Los_Angeles,
         )
@@ -101,7 +100,7 @@ async fn main() {
 
     let weekday_mornings = &mut ScheduledCapture::start_with_cron(
         camera_service.clone(),
-        image_storage_dir.clone(),
+        frame_store.clone(),
         // Every weekday at 7:00am, watch for three hours
         "0 0 7 * * Mon,Tue,Wed,Thu,Fri *",
         America::Los_Angeles,
@@ -112,7 +111,7 @@ async fn main() {
 
     let weekends = &mut ScheduledCapture::start_with_cron(
         camera_service,
-        image_storage_dir,
+        frame_store.clone(),
         // Every weekend at 7:00am, watch for six hours
         "0 0 7 * * Sat,Sun *",
         America::Los_Angeles,

@@ -1,8 +1,9 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone};
-use futures::{StreamExt, stream::FuturesOrdered};
 use serde::{Deserialize, Serialize};
+
+use crate::store;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
@@ -33,7 +34,7 @@ pub struct ApiError {
 }
 
 pub struct Api {
-    image_storage_dir: Arc<Path>,
+    image_store: Arc<store::FrameStore>,
 }
 
 static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z";
@@ -47,8 +48,10 @@ where
 }
 
 impl Api {
-    pub fn new(image_storage_dir: Arc<Path>) -> Arc<Api> {
-        Arc::new(Api { image_storage_dir })
+    pub fn new(frame_store: Arc<store::FrameStore>) -> Arc<Api> {
+        Arc::new(Api {
+            image_store: frame_store,
+        })
     }
 
     /**
@@ -78,98 +81,24 @@ impl Api {
         last: Option<usize>,
         before: Option<String>,
     ) -> Result<Frames, ApiError> {
-        let mut ls = match tokio::fs::read_dir(self.image_storage_dir.clone()).await {
-            Ok(ls) => ls,
-            Err(e) => {
-                return Err(ApiError {
-                    code: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    message: e.to_string(),
-                });
-            }
-        };
+        let frame_metadatas = self
+            .image_store
+            .list_frames(last, before)
+            .await
+            .map_err(|e| ApiError {
+                code: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                message: e.to_string(),
+            })?;
 
-        let mut entries: Vec<tokio::fs::DirEntry> = Vec::new();
-        while let Ok(Some(entry)) = ls.next_entry().await {
-            let Ok(name) = entry.file_name().into_string() else {
-                // Verifies that file names are valid UTF-8
-                continue;
-            };
-
-            if !name.ends_with(".jpg") {
-                // We only want to list JPEG files
-                continue;
-            }
-
-            match before {
-                None => entries.push(entry),
-                Some(ref c) => {
-                    if &name < c {
-                        entries.push(entry);
-                    }
-                }
-            }
-        }
-        entries.sort_by_cached_key(|e| e.file_name());
-        entries.reverse();
-
-        let max_size: usize = 100;
-        let size = match last {
-            None => max_size,
-            Some(s) => {
-                if s < max_size {
-                    s
-                } else {
-                    max_size
-                }
-            }
-        };
-        entries.truncate(size);
-
-        let frames: Vec<Frame> = entries
+        let frames: Vec<Frame> = frame_metadatas
             .into_iter()
-            .map(async |e| -> Result<Frame, ()> {
-                // We know from above that the file name is valid UTF-8, i.e. can be a String
-                let jpg_file_name = e.file_name().into_string().unwrap();
-
-                let mut json_file_path = e.path();
-                json_file_path.set_extension("json");
-
-                let serialized_metadata = match tokio::fs::read(json_file_path).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to load metadata file for {:?}: {:?}",
-                            jpg_file_name, e
-                        );
-                        return Err(());
-                    }
-                };
-                let metadata: crate::pipeline::FrameMetadata =
-                    match serde_json::from_slice(&serialized_metadata) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to parse metadata file for {:?}: {:?}",
-                                jpg_file_name, e
-                            );
-                            return Err(());
-                        }
-                    };
-
-                Ok(Frame {
-                    name: jpg_file_name,
-                    timestamp: metadata.timestamp,
-                    p_hash: metadata.p_hash,
-                    p_hash_distance: metadata.p_hash_distance,
-                })
+            .map(|metadata| Frame {
+                name: metadata.src,
+                timestamp: metadata.timestamp,
+                p_hash: metadata.p_hash,
+                p_hash_distance: metadata.p_hash_distance,
             })
-            // Collect into a FuturesUnordered to run the file reads in parallel
-            .collect::<FuturesOrdered<_>>()
-            // Discard frames that failed to load
-            .filter_map(|r| async move { r.ok() })
-            // Join the futures and collect into the result Vec
-            .collect()
-            .await;
+            .collect();
 
         let start_cursor = frames.last().map(|f| f.name.clone());
         let end_cursor = frames.first().map(|f| f.name.clone());
