@@ -1,4 +1,7 @@
-use std::sync::{Arc, Weak};
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use log::{error, info, warn};
 use opencv::prelude::*;
@@ -6,6 +9,7 @@ use tokio::sync::Mutex;
 use tracing::{Level, span};
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::{prelude::*, registry::Registry};
+use uvc::{FrameFormat, StreamFormat};
 
 #[derive(Clone)]
 pub struct Frame {
@@ -55,7 +59,25 @@ impl CameraService {
                     }
                 };
 
-                let device = match devices.last() {
+                let mut device: Option<uvc::Device> = None;
+                devices.for_each(|d| {
+                    if let Ok(desc) = d.description() {
+                        info!(
+                            "UVC Device: Vendor 0x{:04x} ({}), Product ID 0x{:04x} ({}), Serial Number: {}",
+                            desc.vendor_id,
+                            desc.manufacturer.unwrap_or("unknown".to_string()),
+                            desc.product_id,
+                            desc.product.unwrap_or("unknown".to_string()),
+                            desc.serial_number.unwrap_or("unknown".to_string()),
+                        );
+
+                        device = Some(d);
+                    } else {
+                        error!("Could not get device descriptor");
+                    }
+                });
+
+                let device = match device {
                     Some(d) => d,
                     None => {
                         warn!("No uvc devices found");
@@ -75,26 +97,54 @@ impl CameraService {
                     }
                 };
 
+                device_handle.supported_formats().for_each(|format| {
+                    format.supported_formats().for_each(|supported| {
+                        let fps: Vec<u32> = supported
+                            .intervals_duration()
+                            .iter()
+                            .map(|d| (Duration::from_secs(1).as_millis() / d.as_millis()) as u32)
+                            .collect();
+                        info!(
+                            "Format: subtype {:?}, width {} height {}, fps {:?}",
+                            format.subtype(),
+                            supported.width(),
+                            supported.height(),
+                            fps,
+                        );
+                    });
+                });
+
+                // Select the format with lowest FPS and highest dimensions below width=800
+                let preferred_format = match device_handle.get_preferred_format(cmp_stream_format) {
+                    Some(f) => {
+                        info!(
+                            "Selected format: subtype {:?}, width {} height {}, fps {}",
+                            f.format, f.width, f.height, f.fps,
+                        );
+                        f
+                    }
+                    None => {
+                        warn!("No stream formats found");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        continue 'initialization;
+                    }
+                };
+
                 wait_for_state(StreamCommand::Start, &mut state, &mut cmd_rx).await;
 
                 loop {
                     {
                         info!("Starting the camera");
 
-                        let mut stream_handle = match device_handle
-                            .get_stream_handle_with_format_size_and_fps(
-                                uvc::FrameFormat::Uncompressed,
-                                800,
-                                600,
-                                5,
-                            ) {
-                            Ok(handle) => handle,
-                            Err(e) => {
-                                warn!("Failed to get stream handle: {:?}", e);
-                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                                continue 'initialization;
-                            }
-                        };
+                        let mut stream_handle =
+                            match device_handle.get_stream_handle_with_format(preferred_format) {
+                                Ok(handle) => handle,
+                                Err(e) => {
+                                    warn!("Failed to get stream handle: {:?}", e);
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                    continue 'initialization;
+                                }
+                            };
 
                         let stream_callback_data = StreamCallbackData {
                             tx: frame_tx.clone(),
@@ -166,6 +216,48 @@ impl CameraService {
                 panic!("Failed to send stop command to camera task");
             }
         }
+    }
+}
+
+fn cmp_stream_format(left: StreamFormat, right: StreamFormat) -> StreamFormat {
+    if left.format == FrameFormat::Uncompressed && right.format != FrameFormat::Uncompressed {
+        return left;
+    } else if left.format != FrameFormat::Uncompressed && right.format == FrameFormat::Uncompressed
+    {
+        return right;
+    }
+    if left.format == FrameFormat::MJPEG && right.format != FrameFormat::MJPEG {
+        return left;
+    } else if left.format != FrameFormat::MJPEG && right.format == FrameFormat::MJPEG {
+        return right;
+    }
+    // else both have formats we have confirmed work
+
+    if left.width <= 800 && right.width > 800 {
+        return left;
+    } else if right.width <= 800 && left.width > 800 {
+        return right;
+    }
+    // else both have width <= 800
+
+    if left.width > right.width {
+        return left;
+    } else if right.width > left.width {
+        return right;
+    }
+    // else same width
+
+    if left.height > right.height {
+        return left;
+    } else if right.height < left.height {
+        return right;
+    }
+    // else same height
+
+    if left.fps < right.fps {
+        return left;
+    } else {
+        return right;
     }
 }
 
@@ -380,4 +472,51 @@ fn hash_to_hex_string(hash: &opencv::core::Mat) -> String {
         s.push_str(&format!("{:02x}", v));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use uvc::StreamFormat;
+
+    use crate::camera::cmp_stream_format;
+
+    #[test]
+    fn test_cmp_stream_format_pixel_9a() {
+        let a = StreamFormat {
+            format: uvc::FrameFormat::MJPEG,
+            width: 640,
+            height: 360,
+            fps: 30,
+        };
+        let b = StreamFormat {
+            format: uvc::FrameFormat::MJPEG,
+            width: 640,
+            height: 480,
+            fps: 30,
+        };
+        let c = StreamFormat {
+            format: uvc::FrameFormat::MJPEG,
+            width: 1280,
+            height: 720,
+            fps: 30,
+        };
+        let d = StreamFormat {
+            format: uvc::FrameFormat::MJPEG,
+            width: 1920,
+            height: 1080,
+            fps: 30,
+        };
+
+        // b beats a because width is larger
+        let ab = cmp_stream_format(a, b);
+        assert_eq!(ab.height, 480);
+
+        // b beats c because width is <= 800
+        let bc = cmp_stream_format(b, c);
+        assert_eq!(bc.width, 640);
+
+        // b beats d because width is <= 800
+        let bd = cmp_stream_format(b, d);
+        assert_eq!(bd.width, 640);
+    }
 }
