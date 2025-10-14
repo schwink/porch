@@ -33,7 +33,7 @@ pub async fn start_capture<Tz: TimeZone>(
         prev_p_hash = Some(frame.p_hash.clone());
 
         if let Some(distance) = p_hash_distance {
-            if distance < 10 {
+            if distance < 12 {
                 info!(
                     "Skipping frame at {} due to low p hash distance of {}",
                     frame.timestamp, distance
