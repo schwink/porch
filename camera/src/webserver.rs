@@ -2,7 +2,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
-use crate::camera::StreamHandle;
+use crate::{api::ApiError, camera::StreamHandle};
 use async_stream::{stream, try_stream};
 use axum::{
     Json, Router,
@@ -151,34 +151,94 @@ struct ApiFramesQueryParams {
 async fn api_frames(
     State(state): State<WebServerState>,
     Query(params): Query<ApiFramesQueryParams>,
-) -> impl axum::response::IntoResponse {
-    match state.api.frames(params.last, params.before).await {
-        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
-        Err(e) => (e.code, Json(ApiErrorData { message: e.message })).into_response(),
+) -> Result<Json<crate::api::Frames>, ApiError> {
+    state
+        .api
+        .frames(params.last, params.before)
+        .await
+        .map(|f| Json(f))
+}
+
+#[derive(Deserialize)]
+struct ApiFramesLatestQueryParams {
+    pub after: Option<String>,
+}
+
+#[axum::debug_handler]
+async fn api_frames_latest(
+    State(state): State<WebServerState>,
+    Query(params): Query<ApiFramesLatestQueryParams>,
+) -> Result<
+    Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>,
+    crate::api::ApiError,
+> {
+    let mut rx = state.frame_store.frame_rx.resubscribe();
+
+    let catchup_frames = if params.after.is_some() {
+        let ls = state
+            .frame_store
+            .list_frames(None, None, None, params.after)
+            .await;
+        match ls {
+            Ok(f) => f,
+            Err(_) => {
+                return Err(ApiError {
+                    code: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "Error fetching frames".to_string(),
+                });
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(Sse::new(try_stream! {
+        yield axum::response::sse::Event::default()
+            .retry(Duration::from_secs(3));
+
+        for metadata in catchup_frames {
+            let edge: crate::api::FrameEdge = metadata.into();
+            yield edge.into();
+        }
+
+        while let Ok(metadata) = rx.recv().await {
+            let edge: crate::api::FrameEdge = metadata.into();
+            yield edge.into();
+        }
+    })
+    .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(1))))
+}
+
+impl IntoResponse for crate::api::ApiError {
+    fn into_response(self) -> Response {
+        (
+            self.code,
+            Json(ApiErrorData {
+                message: self.message,
+            }),
+        )
+            .into_response()
     }
 }
 
-async fn api_frames_latest(
-    State(state): State<WebServerState>,
-) -> Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>> {
-    let mut rx = state.frame_store.frame_rx.resubscribe();
-
-    Sse::new(try_stream! {
-        while let Ok(metadata) = rx.recv().await {
-            let frame = crate::api::Frame {
-                    name: metadata.src,
-                    timestamp: metadata.timestamp,
-                    p_hash: metadata.p_hash,
-                    p_hash_distance: metadata.p_hash_distance,
-                };
-            let edge = crate::api::FrameEdge {
-                node: frame,
-                cursor: metadata.name,
-            };
-            let json = serde_json::to_string(&edge).unwrap();
-            let event = axum::response::sse::Event::default().data(json);
-            yield event;
+impl Into<crate::api::FrameEdge> for crate::store::FrameMetadata {
+    fn into(self) -> crate::api::FrameEdge {
+        let frame = crate::api::Frame {
+            name: self.src,
+            timestamp: self.timestamp,
+            p_hash: self.p_hash,
+            p_hash_distance: self.p_hash_distance,
+        };
+        crate::api::FrameEdge {
+            node: frame,
+            cursor: self.name,
         }
-    })
-    .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(1)))
+    }
+}
+
+impl Into<axum::response::sse::Event> for crate::api::FrameEdge {
+    fn into(self) -> axum::response::sse::Event {
+        let json = serde_json::to_string(&self).unwrap();
+        axum::response::sse::Event::default().data(json)
+    }
 }

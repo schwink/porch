@@ -89,7 +89,7 @@ impl Api {
     ) -> Result<Frames, ApiError> {
         let frame_metadatas = self
             .image_store
-            .list_frames(last, before)
+            .list_frames(last, before, None, None)
             .await
             .map_err(|e| ApiError {
                 code: axum::http::StatusCode::INTERNAL_SERVER_ERROR,

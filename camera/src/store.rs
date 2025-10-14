@@ -76,6 +76,8 @@ impl FrameStore {
         &self,
         last: Option<usize>,
         before: Option<String>,
+        first: Option<usize>,
+        after: Option<String>,
     ) -> Result<Vec<FrameMetadata>, Box<dyn Error>> {
         let mut ls = tokio::fs::read_dir(self.image_storage_dir.as_ref()).await?;
 
@@ -90,31 +92,36 @@ impl FrameStore {
                 // We only want to list JPEG files
                 continue;
             }
+            // Slice off the file extension
+            let cursor = &name.as_str()[0..(name.len() - 4)];
 
-            match before {
-                None => entries.push(entry),
-                Some(ref c) => {
-                    if &name < c {
-                        entries.push(entry);
-                    }
-                }
+            let pass_before = if let Some(ref b) = before {
+                cursor < b.as_str()
+            } else {
+                true
+            };
+            let pass_after = if let Some(ref a) = after {
+                cursor > a.as_str()
+            } else {
+                true
+            };
+            if pass_before && pass_after {
+                entries.push(entry);
             }
         }
         entries.sort_by_cached_key(|e| e.file_name());
-        entries.reverse();
 
-        let max_size: usize = 100;
-        let size = match last {
-            None => max_size,
-            Some(s) => {
-                if s < max_size {
-                    s
-                } else {
-                    max_size
-                }
-            }
-        };
-        entries.truncate(size);
+        // Maximum page size
+        entries.truncate(100);
+
+        // Typically only first or last will be specified
+        if let Some(f) = first {
+            entries.truncate(f);
+        }
+        entries.reverse();
+        if let Some(l) = last {
+            entries.truncate(l);
+        }
 
         let frames: Vec<FrameMetadata> = entries
             .into_iter()
@@ -237,7 +244,7 @@ mod tests {
 
         write_test_frames(&store).await;
 
-        let ls = store.list_frames(Some(5), None).await.unwrap();
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
 
         assert_eq!(ls.len(), 5);
         assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
@@ -255,7 +262,7 @@ mod tests {
 
         write_test_frames(&store).await;
 
-        let ls = store.list_frames(Some(2), None).await.unwrap();
+        let ls = store.list_frames(Some(2), None, None, None).await.unwrap();
 
         assert_eq!(ls.len(), 2);
         // The two most recent ones, per "last: 2"
@@ -272,7 +279,12 @@ mod tests {
         write_test_frames(&store).await;
 
         let ls = store
-            .list_frames(None, Some("2025-10-13_23-20-24-231_+0000".to_string()))
+            .list_frames(
+                None,
+                Some("2025-10-13_23-20-24-231_+0000".to_string()),
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -290,7 +302,12 @@ mod tests {
         write_test_frames(&store).await;
 
         let ls = store
-            .list_frames(Some(1), Some("2025-10-13_23-20-24-231_+0000".to_string()))
+            .list_frames(
+                Some(1),
+                Some("2025-10-13_23-20-24-231_+0000".to_string()),
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -307,10 +324,142 @@ mod tests {
         write_test_frames(&store).await;
 
         let ls = store
-            .list_frames(None, Some("2025-10-13_23-20-22-231_+0000".to_string()))
+            .list_frames(
+                None,
+                Some("2025-10-13_23-20-22-231_+0000".to_string()),
+                None,
+                None,
+            )
             .await
             .unwrap();
 
+        assert_eq!(ls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_first_2() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store.list_frames(None, None, Some(2), None).await.unwrap();
+
+        assert_eq!(ls.len(), 2);
+        // The two most oldest ones, per "first: 2"
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-23-231_+0000");
+        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_after() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store
+            .list_frames(
+                None,
+                None,
+                None,
+                Some("2025-10-13_23-20-24-231_+0000".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ls.len(), 2);
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
+        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_last_after() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store
+            .list_frames(
+                None,
+                None,
+                Some(1),
+                Some("2025-10-13_23-20-24-231_+0000".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_after_last() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store
+            .list_frames(
+                None,
+                None,
+                None,
+                Some("2025-10-13_23-20-26-231_+0000".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_before_after() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store
+            .list_frames(
+                None,
+                Some("2025-10-13_23-20-26-231_+0000".to_string()),
+                None,
+                Some("2025-10-13_23-20-23-231_+0000".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ls.len(), 2);
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-24-231_+0000");
+    }
+
+    #[tokio::test]
+    async fn test_list_frames_before_after_not_overlapping() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store
+            .list_frames(
+                None,
+                Some("2025-10-13_23-20-23-231_+0000".to_string()),
+                None,
+                Some("2025-10-13_23-20-26-231_+0000".to_string()),
+            )
+            .await
+            .unwrap();
+
+        // after > before, so nothing will match both
         assert_eq!(ls.len(), 0);
     }
 }

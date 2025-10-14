@@ -139,6 +139,8 @@
 
       const [isLoading, setIsLoading] = React.useState(true);
       const [isFetching, setIsFetching] = React.useState(false);
+      const frameStreamEventSourceRef = React.useRef(null);
+      const [frameStreamRetryCounter, setFrameStreamRetryCounter] = React.useState(0);
       const [startCursor, setStartCursor] = React.useState(null);
       const [endCursor, setEndCursor] = React.useState(null);
       const [hasPreviousPage, setHasPreviousPage] = React.useState(true);
@@ -161,13 +163,17 @@
           }
           const result = await response.json();
 
-          // Sort frames newest first
-          const newFrames = result.nodes;
-          newFrames.sort((a, b) => b.timestamp - a.timestamp);
-          console.log(`Fetched ${newFrames.length} frames`);
-          setFrames([...frames, ...newFrames]);
+          setFrames(frames => {
+            const newFrames = [...frames, ...result.nodes];
+            newFrames.sort((a, b) => b.timestamp - a.timestamp);
+            return newFrames;
+          });
 
           setStartCursor(result.startCursor);
+          if (endCursor === null) {
+            // First page received
+            setEndCursor(result.endCursor);
+          }
           setHasPreviousPage(result.hasPreviousPage);
         } catch (error) {
           setError(error);
@@ -197,35 +203,49 @@
           return;
         }
 
-        const eventSource = new EventSource('api/frames/latest');
+        const backoffMs = 500 * frameStreamRetryCounter;
+        console.log(`Connecting to SSE in ${backoffMs}ms`);
+        const timeout = setTimeout(
+          () => {
+            frameStreamEventSourceRef.current = new EventSource(`api/frames/latest?after=${endCursor}`);
 
-        eventSource.onopen = () => {
-          console.log('SSE connection opened.');
-        };
+            frameStreamEventSourceRef.current.onopen = () => {
+              console.log('SSE connection opened.');
+            };
 
-        eventSource.onmessage = (event) => {
-          console.log('Received message:', event.data);
+            frameStreamEventSourceRef.current.onmessage = (event) => {
+              console.debug('Received message:', event.data);
 
-          const newFrame = JSON.parse(event.data).node;
-          if (newFrame) {
-            setFrames(frames => {
-              const newFrames = [newFrame, ...frames];
-              newFrames.sort((a, b) => b.timestamp - a.timestamp);
-              return newFrames;
-            });
-          }
-        };
+              const newFrameEdge = JSON.parse(event.data);
+              const newFrame = newFrameEdge.node;
+              if (newFrame) {
+                setEndCursor(newFrameEdge.cursor);
+                setFrames(frames => {
+                  const newFrames = [newFrame, ...frames];
+                  newFrames.sort((a, b) => b.timestamp - a.timestamp);
+                  return newFrames;
+                });
+              }
+            };
 
-        eventSource.onerror = (error) => {
-          console.error('SSE error:', error);
-          eventSource.close(); // Close on error
-        };
+            frameStreamEventSourceRef.current.onerror = (error) => {
+              console.error('SSE error:', error);
+              setFrameStreamRetryCounter(count => count + 1);
+              frameStreamEventSourceRef.current.close();
+              frameStreamEventSourceRef.current = null;
+            };
+          },
+          backoffMs
+        );
 
         return () => {
-          eventSource.close(); // Cleanup: Close connection on component unmount
-          console.log('SSE connection closed.');
+          clearTimeout(timeout);
+          if (frameStreamEventSourceRef.current) {
+            frameStreamEventSourceRef.current.close();
+            frameStreamEventSourceRef.current = null;
+          }
         };
-      }, [isLoading]);
+      }, [isLoading, frameStreamRetryCounter]);
 
       // Fetch older frames on scroll down
       React.useEffect(() => {
