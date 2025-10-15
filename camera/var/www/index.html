@@ -2,10 +2,18 @@
 
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Porch</title>
   <style>
     body {
       background-color: lightgray;
+      margin: 0px;
+      padding: 0px;
+    }
+
+    div#root {
+      margin: 0px;
+      padding: 0px;
     }
 
     div.live_video {
@@ -31,6 +39,7 @@
 
     ul.frame_list {
       list-style-type: none;
+      width: fit-content;
       padding: 0;
       margin: 0;
     }
@@ -46,18 +55,19 @@
     }
 
     li.frame img {
+      max-width: 80vw;
       border-radius: 8px;
       border-right: 1px solid darkgray;
     }
 
     li.frame div {
-      width: 100%;
+      width: fit-content;
       margin: 16px;
       font-size: 1.2em;
     }
 
     li.frame table {
-      width: 100%;
+      width: auto;
     }
 
     table {
@@ -93,30 +103,6 @@
     import PropTypes from "https://unpkg.com/es-react@latest/dev/prop-types.js";
     import htm from "https://unpkg.com/htm@latest?module";
     const html = htm.bind(React.createElement);
-
-    const LiveVideo = (props) => {
-      const [isLive, setIsLive] = React.useState(false);
-      const handleToggle = () => {
-        setIsLive(isLive => !isLive);
-      };
-
-      return html`<div className="live_video">
-          <p key="toggle">
-            <button onClick=${handleToggle}>
-              ${isLive ? 'Switch to Peek' : 'Switch to Live'}
-            </button>
-          </p>
-
-          <!--
-            Once an <img> is opened, the browser will not stop downloading it, even if it is removed
-            from the DOM. To enable the connection to be closed and the camera to be freed, load the
-            image in a separate document in a frame.
-          -->
-          <iframe key="video" src=${isLive ? 'live.html' : 'peek.html'} width=800 height=600></iframe>
-        </div>`;
-    };
-    LiveVideo.propTypes = {
-    };
 
     const FrameListItem = ({ frame } = props) => {
       return html`<li className="frame">
@@ -288,7 +274,6 @@
       const scrollContainerRef = React.useRef();
 
       return html`<div ref=${scrollContainerRef} style=${{ "height": "100%", "overflow": "auto" }}>
-          <${LiveVideo} key="live_video" />
           <${FrameList} key="frame_list" scrollContainerRef=${scrollContainerRef} />
         </div>`;
     }
