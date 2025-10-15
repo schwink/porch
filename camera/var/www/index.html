@@ -104,7 +104,8 @@
     import htm from "https://unpkg.com/htm@latest?module";
     const html = htm.bind(React.createElement);
 
-    const FrameListItem = ({ frame } = props) => {
+    const FrameListItem = ({ frame, onDelete } = props) => {
+      const del = () => { onDelete(frame.name) }
       return html`<li className="frame">
         <img src="frames/${frame.name}"></img>
         <div>
@@ -115,11 +116,14 @@
             <tr><td>Perceptual Hash Distance:</td><td><code>${frame.p_hash_distance}</code></td></tr>
             </tbody>
           </table>
+
+          <button onClick=${del}>Delete</button>
         </div>
       </li>`;
     };
     FrameListItem.propTypes = {
       frame: PropTypes.object.isRequired,
+      onDelete: PropTypes.func.isRequired,
     };
 
     const FrameList = ({ scrollContainerRef } = props) => {
@@ -247,13 +251,26 @@
         };
       }, [scrollContainerRef.current, isFetching, startCursor, hasPreviousPage, frames]);
 
+      const deleteFrame = async (src) => {
+        const name = src.substring(0, src.length - 4);
+        const response = await fetch(`api/frames/${name}`, {
+          method: 'DELETE',
+        });
+        if (!response.ok) {
+          console.error(`HTTP error on frame delete! status: ${response.status}`);
+          return;
+        }
+
+        setFrames(frames => frames.filter(x => x.name != src));
+      };
+
       if (isLoading) {
         return html`<p>Loading...</p>`;
       } else if (error) {
         return html`<p>Error</p>`;
       } else {
         return html`<ul className="frame_list">
-            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.name} />`)}
+            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.name} onDelete=${deleteFrame} />`)}
             ${isFetching && html`<li key="loading">Loading...</li>`}
             ${!hasPreviousPage && html`<li key="end">No more frames</li>`}
             ${hasPreviousPage && html`

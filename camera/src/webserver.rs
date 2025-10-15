@@ -7,13 +7,13 @@ use async_stream::{stream, try_stream};
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response, Sse},
-    routing::{get, get_service},
+    routing::{delete, get, get_service},
 };
 use log::info;
-use std::{convert::Infallible, path::Path, time::Duration};
+use std::{convert::Infallible, time::Duration};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::services::ServeDir;
 
@@ -42,7 +42,7 @@ impl WebServer {
         camera_service: Arc<CameraService>,
         api: Arc<Api>,
         frame_store: Arc<FrameStore>,
-        image_storage_dir: Box<Path>,
+        image_storage_dir: Box<std::path::Path>,
     ) -> Self {
         let handle = tokio::task::spawn(async move {
             let state = WebServerState {
@@ -58,6 +58,7 @@ impl WebServer {
             let app = Router::new()
                 .fallback_service(static_file_service)
                 .nest_service("/frames", images_static_file_service)
+                .route("/api/frames/{name}", delete(api_delete_frame))
                 .route("/api/frames", get(api_frames))
                 .route("/api/frames/latest", get(api_frames_latest))
                 .route("/live.mjpeg", get(live))
@@ -140,6 +141,26 @@ async fn peek(State(state): State<WebServerState>) -> Response<Body> {
 #[derive(Debug, Serialize)]
 pub struct ApiErrorData {
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiOk {
+    ok: bool,
+}
+
+async fn api_delete_frame(
+    State(state): State<WebServerState>,
+    Path(name): Path<String>,
+) -> Result<Json<ApiOk>, ApiError> {
+    state
+        .frame_store
+        .delete(name.as_str())
+        .await
+        .map(|_| Json(ApiOk { ok: true }))
+        .map_err(|e| ApiError {
+            code: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })
 }
 
 #[derive(Deserialize)]

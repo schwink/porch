@@ -160,13 +160,25 @@ impl FrameStore {
             .await;
         Ok(frames)
     }
+
+    pub async fn delete(&self, name: &str) -> Result<(), Box<dyn Error>> {
+        let mut path = self.image_storage_dir.join(name);
+        info!("Trying to delete {}", path.as_os_str().to_str().unwrap());
+        path.set_extension("jpg");
+        let remove_jpg = tokio::fs::remove_file(&path).await;
+        path.set_extension("json");
+        let remove_json = tokio::fs::remove_file(path).await;
+
+        remove_jpg?;
+        remove_json?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
 
-    use std::fs::Metadata;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -474,5 +486,31 @@ mod tests {
 
         // after > before, so nothing will match both
         assert_eq!(ls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        write_test_frames(&store).await;
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+        assert_eq!(ls.len(), 5);
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
+        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(ls.get(2).unwrap().name, "2025-10-13_23-20-24-231_+0000");
+        assert_eq!(ls.get(3).unwrap().name, "2025-10-13_23-20-23-231_+0000");
+        assert_eq!(ls.get(4).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+
+        store.delete("2025-10-13_23-20-24-231_+0000").await.unwrap();
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+        assert_eq!(ls.len(), 4);
+        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
+        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(ls.get(2).unwrap().name, "2025-10-13_23-20-23-231_+0000");
+        assert_eq!(ls.get(3).unwrap().name, "2025-10-13_23-20-22-231_+0000");
     }
 }
