@@ -123,9 +123,11 @@
         <img src="frames/${frame.name}"></img>
         <div>
           <table>
+            <tbody>
             <tr><td>Time:</td><td>${new Date(frame.timestamp).toLocaleString()}</td></tr>
             <tr><td>Perceptual Hash:</td><td><code>${frame.p_hash}</code></td></tr>
             <tr><td>Perceptual Hash Distance:</td><td><code>${frame.p_hash_distance}</code></td></tr>
+            </tbody>
           </table>
         </div>
       </li>`;
