@@ -168,7 +168,8 @@
           setFrames(frames => {
             const newFrames = [...frames, ...result.nodes];
             newFrames.sort((a, b) => b.timestamp - a.timestamp);
-            return newFrames;
+            const unique = newFrames.filter((x, i, a) => !i || x.name != a[i - 1].name)
+            return unique;
           });
 
           setStartCursor(result.startCursor);
@@ -225,7 +226,8 @@
                 setFrames(frames => {
                   const newFrames = [newFrame, ...frames];
                   newFrames.sort((a, b) => b.timestamp - a.timestamp);
-                  return newFrames;
+                  const unique = newFrames.filter((x, i, a) => !i || x.name != a[i - 1].name)
+                  return unique;
                 });
               }
             };
