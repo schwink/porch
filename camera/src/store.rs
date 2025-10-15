@@ -49,9 +49,6 @@ impl FrameStore {
     ) -> Result<FrameMetadata, Box<dyn Error>> {
         let filename = crate::api::time_to_file_basename(&frame.timestamp);
         let mut path = self.image_storage_dir.join(&filename);
-        path.set_extension("jpg");
-
-        tokio::fs::write(&path, &frame.jpeg).await?;
 
         let frame_metadata = FrameMetadata {
             name: filename.clone(),
@@ -64,6 +61,9 @@ impl FrameStore {
 
         path.set_extension("json");
         tokio::fs::write(&path, frame_metadata_json).await?;
+
+        path.set_extension("jpg");
+        tokio::fs::write(&path, &frame.jpeg).await?;
 
         if let Ok(n) = self.frame_tx.send(frame_metadata.clone()) {
             info!("Broadcast new frame to {} subscribers", n);
