@@ -109,9 +109,6 @@ impl FrameStore {
         }
         entries.sort_by_cached_key(|e| e.file_name());
 
-        // Maximum page size
-        entries.truncate(100);
-
         // Typically only first or last will be specified
         if let Some(f) = first {
             entries.truncate(f);
@@ -120,6 +117,9 @@ impl FrameStore {
         if let Some(l) = last {
             entries.truncate(l);
         }
+
+        // Maximum page size
+        entries.truncate(100);
 
         let frames: Vec<FrameMetadata> = entries
             .into_iter()
