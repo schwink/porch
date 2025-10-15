@@ -99,7 +99,7 @@ impl Api {
         let frames: Vec<Frame> = frame_metadatas
             .into_iter()
             .map(|metadata| Frame {
-                name: metadata.src,
+                name: format!("{}.jpg", metadata.name),
                 timestamp: metadata.timestamp,
                 p_hash: metadata.p_hash,
                 p_hash_distance: metadata.p_hash_distance,

@@ -12,7 +12,6 @@ use tokio::sync::broadcast;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FrameMetadata {
     pub name: String,
-    pub src: String,
     pub timestamp: i64,
     pub p_hash: String,
     pub p_hash_distance: Option<u64>,
@@ -52,7 +51,6 @@ impl FrameStore {
 
         let frame_metadata = FrameMetadata {
             name: filename.clone(),
-            src: format!("{}.jpg", filename),
             timestamp: frame.timestamp.timestamp_millis(),
             p_hash: frame.p_hash,
             p_hash_distance,
@@ -168,6 +166,7 @@ impl FrameStore {
 mod tests {
     use chrono::DateTime;
 
+    use std::fs::Metadata;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -191,9 +190,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metadata.name, "2025-10-13_23-20-22-231_+0000");
-        assert_eq!(metadata.src, "2025-10-13_23-20-22-231_+0000.jpg");
         assert_eq!(metadata.p_hash, "c41782ed3c9263cd");
         assert_eq!(metadata.p_hash_distance, None);
+    }
+
+    #[test]
+    fn test_deserialize_extra_fields() {
+        let json = r#"{
+            "name": "2025-10-15_16-59-50-912_+0000",
+            "src": "2025-10-15_16-59-50-912_+0000.jpg",
+            "timestamp": 1760547590912,
+            "p_hash": "751b86ec3cb379cc",
+            "p_hash_distance": 10
+        }"#;
+
+        let actual: Result<crate::store::FrameMetadata, serde_json::Error> =
+            serde_json::from_slice(json.as_bytes());
+        assert_eq!(actual.is_ok(), true);
     }
 
     /**
