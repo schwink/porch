@@ -179,8 +179,9 @@
 
       const onScroll = () => {
         if (scrollContainerRef.current) {
+          const BUFFER = 200;
           const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-          if (scrollTop + clientHeight === scrollHeight) {
+          if (scrollTop + clientHeight + BUFFER >= scrollHeight) {
             fetchData();
           }
         }
