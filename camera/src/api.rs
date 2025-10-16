@@ -7,7 +7,8 @@ use crate::store;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
-    pub name: String,
+    pub id: String,
+    pub src: String,
     pub timestamp: i64,
     pub p_hash: String,
     pub p_hash_distance: Option<u64>,
@@ -99,15 +100,16 @@ impl Api {
         let frames: Vec<Frame> = frame_metadatas
             .into_iter()
             .map(|metadata| Frame {
-                name: format!("{}.jpg", metadata.name),
+                id: metadata.name.clone(),
+                src: format!("{}.jpg", metadata.name),
                 timestamp: metadata.timestamp,
                 p_hash: metadata.p_hash,
                 p_hash_distance: metadata.p_hash_distance,
             })
             .collect();
 
-        let start_cursor = frames.last().map(|f| f.name.clone());
-        let end_cursor = frames.first().map(|f| f.name.clone());
+        let start_cursor = frames.last().map(|f| f.src.clone());
+        let end_cursor = frames.first().map(|f| f.src.clone());
 
         Ok(Frames {
             nodes: frames,

@@ -105,12 +105,13 @@
     const html = htm.bind(React.createElement);
 
     const FrameListItem = ({ frame, onDelete } = props) => {
-      const del = () => { onDelete(frame.name) }
+      const del = () => { onDelete(frame.id) }
       return html`<li className="frame">
-        <img src="frames/${frame.name}"></img>
+        <img src="frames/${frame.src}"></img>
         <div>
           <table>
             <tbody>
+            <tr><td>ID:</td><td><code>${frame.id}</code></td></tr>
             <tr><td>Time:</td><td>${new Date(frame.timestamp).toLocaleString()}</td></tr>
             <tr><td>Perceptual Hash:</td><td><code>${frame.p_hash}</code></td></tr>
             <tr><td>Perceptual Hash Distance:</td><td><code>${frame.p_hash_distance}</code></td></tr>
@@ -158,7 +159,7 @@
           setFrames(frames => {
             const newFrames = [...frames, ...result.nodes];
             newFrames.sort((a, b) => b.timestamp - a.timestamp);
-            const unique = newFrames.filter((x, i, a) => !i || x.name != a[i - 1].name)
+            const unique = newFrames.filter((x, i, a) => !i || x.id != a[i - 1].id)
             return unique;
           });
 
@@ -216,7 +217,7 @@
                 setFrames(frames => {
                   const newFrames = [newFrame, ...frames];
                   newFrames.sort((a, b) => b.timestamp - a.timestamp);
-                  const unique = newFrames.filter((x, i, a) => !i || x.name != a[i - 1].name)
+                  const unique = newFrames.filter((x, i, a) => !i || x.id != a[i - 1].id)
                   return unique;
                 });
               }
@@ -251,9 +252,8 @@
         };
       }, [scrollContainerRef.current, isFetching, startCursor, hasPreviousPage, frames]);
 
-      const deleteFrame = async (src) => {
-        const name = src.substring(0, src.length - 4);
-        const response = await fetch(`api/frames/${name}`, {
+      const deleteFrame = async (id) => {
+        const response = await fetch(`api/frames/${id}`, {
           method: 'DELETE',
         });
         if (!response.ok) {
@@ -261,7 +261,7 @@
           return;
         }
 
-        setFrames(frames => frames.filter(x => x.name != src));
+        setFrames(frames => frames.filter(x => x.id != id));
       };
 
       if (isLoading) {
@@ -270,7 +270,7 @@
         return html`<p>Error</p>`;
       } else {
         return html`<ul className="frame_list">
-            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.name} onDelete=${deleteFrame} />`)}
+            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.id} onDelete=${deleteFrame} />`)}
             ${isFetching && html`<li key="loading">Loading...</li>`}
             ${!hasPreviousPage && html`<li key="end">No more frames</li>`}
             ${hasPreviousPage && html`

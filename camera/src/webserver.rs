@@ -245,7 +245,8 @@ impl IntoResponse for crate::api::ApiError {
 impl Into<crate::api::FrameEdge> for crate::store::FrameMetadata {
     fn into(self) -> crate::api::FrameEdge {
         let frame = crate::api::Frame {
-            name: format!("{}.jpg", self.name),
+            id: self.name.clone(),
+            src: format!("{}.jpg", self.name),
             timestamp: self.timestamp,
             p_hash: self.p_hash,
             p_hash_distance: self.p_hash_distance,
