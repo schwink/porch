@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use chrono_tz::America;
@@ -11,12 +11,16 @@ mod api;
 mod camera;
 mod controller;
 mod store;
+mod training;
 mod webserver;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     image_storage_dir: PathBuf,
+
+    #[arg(long)]
+    labeling_config: PathBuf,
 
     #[arg(long)]
     log_dir: Option<PathBuf>,
@@ -63,7 +67,7 @@ async fn main() {
 
     simplelog::CombinedLogger::init(loggers).unwrap();
 
-    let image_storage_dir = cli.image_storage_dir;
+    let image_storage_dir: Box<Path> = cli.image_storage_dir.into();
     match tokio::fs::create_dir_all(image_storage_dir.clone()).await {
         Err(e) => {
             panic!(
@@ -74,17 +78,23 @@ async fn main() {
         _ => (),
     };
 
-    let frame_store = store::FrameStore::new(image_storage_dir.as_path());
+    let frame_store = store::FrameStore::new(image_storage_dir.as_ref());
+
+    let labeling_config = training::load_labeling_config(cli.labeling_config.as_path())
+        .await
+        .unwrap();
+    let label_store = training::LabelStore::new(labeling_config, image_storage_dir.clone());
 
     let camera_service = camera::CameraService::new(cli.log_dir);
 
-    let api = api::Api::new(frame_store.clone());
+    let api = api::Api::new(frame_store.clone(), label_store.clone());
 
     let _webserver = webserver::WebServer::new(
         camera_service.clone(),
         api.clone(),
         frame_store.clone(),
-        Box::from(image_storage_dir.as_path()),
+        label_store,
+        Box::from(image_storage_dir),
     )
     .await;
 

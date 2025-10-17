@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone};
+use futures::StreamExt;
+use futures::stream::FuturesOrdered;
 use serde::{Deserialize, Serialize};
 
 use crate::store;
+use crate::training;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Frame {
@@ -12,6 +15,7 @@ pub struct Frame {
     pub timestamp: i64,
     pub p_hash: String,
     pub p_hash_distance: Option<u64>,
+    pub labels: Option<training::Labels>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -41,7 +45,8 @@ pub struct ApiError {
 }
 
 pub struct Api {
-    image_store: Arc<store::FrameStore>,
+    frame_store: Arc<store::FrameStore>,
+    label_store: Arc<training::LabelStore>,
 }
 
 static FILE_NAME_FORMAT: &str = "%Y-%m-%d_%H-%M-%S-%3f_%z";
@@ -55,9 +60,13 @@ where
 }
 
 impl Api {
-    pub fn new(frame_store: Arc<store::FrameStore>) -> Arc<Api> {
+    pub fn new(
+        frame_store: Arc<store::FrameStore>,
+        label_store: Arc<training::LabelStore>,
+    ) -> Arc<Api> {
         Arc::new(Api {
-            image_store: frame_store,
+            frame_store,
+            label_store,
         })
     }
 
@@ -89,7 +98,7 @@ impl Api {
         before: Option<String>,
     ) -> Result<Frames, ApiError> {
         let frame_metadatas = self
-            .image_store
+            .frame_store
             .list_frames(last, before, None, None)
             .await
             .map_err(|e| ApiError {
@@ -99,14 +108,23 @@ impl Api {
 
         let frames: Vec<Frame> = frame_metadatas
             .into_iter()
-            .map(|metadata| Frame {
-                id: metadata.name.clone(),
-                src: format!("{}.jpg", metadata.name),
-                timestamp: metadata.timestamp,
-                p_hash: metadata.p_hash,
-                p_hash_distance: metadata.p_hash_distance,
+            .map(async |metadata| {
+                let labels = self.label_store.get_labels(&metadata.name).await;
+
+                Frame {
+                    id: metadata.name.clone(),
+                    src: format!("{}.jpg", metadata.name),
+                    timestamp: metadata.timestamp,
+                    p_hash: metadata.p_hash,
+                    p_hash_distance: metadata.p_hash_distance,
+                    labels: labels.ok(),
+                }
             })
-            .collect();
+            // Collect into a FuturesUnordered to run the file reads in parallel
+            .collect::<FuturesOrdered<_>>()
+            // Join the futures and collect into the result Vec
+            .collect()
+            .await;
 
         let start_cursor = frames.last().map(|f| f.src.clone());
         let end_cursor = frames.first().map(|f| f.src.clone());

@@ -2,7 +2,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
-use crate::{api::ApiError, camera::StreamHandle};
+use crate::{api::ApiError, camera::StreamHandle, training::Labels, training::TagSet};
 use async_stream::{stream, try_stream};
 use axum::{
     Json, Router,
@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response, Sse},
-    routing::{delete, get, get_service},
+    routing::{delete, get, get_service, post},
 };
 use log::info;
 use std::{convert::Infallible, time::Duration};
@@ -20,12 +20,14 @@ use tower_http::services::ServeDir;
 use crate::api::Api;
 use crate::camera::CameraService;
 use crate::store::FrameStore;
+use crate::training::LabelStore;
 
 #[derive(Clone)]
 struct WebServerState {
     camera_service: Arc<CameraService>,
     api: Arc<Api>,
     frame_store: Arc<FrameStore>,
+    label_store: Arc<LabelStore>,
 }
 
 pub struct WebServer {
@@ -42,6 +44,7 @@ impl WebServer {
         camera_service: Arc<CameraService>,
         api: Arc<Api>,
         frame_store: Arc<FrameStore>,
+        label_store: Arc<LabelStore>,
         image_storage_dir: Box<std::path::Path>,
     ) -> Self {
         let handle = tokio::task::spawn(async move {
@@ -49,6 +52,7 @@ impl WebServer {
                 camera_service,
                 api,
                 frame_store,
+                label_store,
             };
 
             let static_file_service = get_service(ServeDir::new("var/www"));
@@ -58,9 +62,11 @@ impl WebServer {
             let app = Router::new()
                 .fallback_service(static_file_service)
                 .nest_service("/frames", images_static_file_service)
-                .route("/api/frames/{name}", delete(api_delete_frame))
+                .route("/api/frames/{id}", delete(api_delete_frame))
                 .route("/api/frames", get(api_frames))
                 .route("/api/frames/latest", get(api_frames_latest))
+                .route("/api/frames/{id}/tags/", post(api_labels_tags_post))
+                .route("/api/labels/tags", get(api_labels_tags))
                 .route("/live.mjpeg", get(live))
                 .route("/peek.mjpeg", get(peek))
                 .with_state(state.clone());
@@ -150,11 +156,11 @@ pub struct ApiOk {
 
 async fn api_delete_frame(
     State(state): State<WebServerState>,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<ApiOk>, ApiError> {
     state
         .frame_store
-        .delete(name.as_str())
+        .delete(id.as_str())
         .await
         .map(|_| Json(ApiOk { ok: true }))
         .map_err(|e| ApiError {
@@ -250,6 +256,8 @@ impl Into<crate::api::FrameEdge> for crate::store::FrameMetadata {
             timestamp: self.timestamp,
             p_hash: self.p_hash,
             p_hash_distance: self.p_hash_distance,
+            // These are newly captured frames, so they have no labels yet
+            labels: None,
         };
         crate::api::FrameEdge {
             node: frame,
@@ -263,4 +271,24 @@ impl Into<axum::response::sse::Event> for crate::api::FrameEdge {
         let json = serde_json::to_string(&self).unwrap();
         axum::response::sse::Event::default().data(json)
     }
+}
+
+async fn api_labels_tags(State(state): State<WebServerState>) -> Json<Vec<TagSet>> {
+    Json(state.label_store.config.tag_sets.clone())
+}
+
+async fn api_labels_tags_post(
+    State(state): State<WebServerState>,
+    Path(id): Path<String>,
+    Json(tags): Json<TagSet>,
+) -> Result<Json<Labels>, ApiError> {
+    state
+        .label_store
+        .set_tags(&id, tags)
+        .await
+        .map(|labels| Json(labels))
+        .map_err(|e| ApiError {
+            code: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })
 }

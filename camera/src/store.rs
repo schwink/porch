@@ -189,7 +189,7 @@ mod tests {
     async fn test_metadata_file_round_trip() {
         let dir = tempdir().expect("Failed to create temporary directory");
 
-        let store = FrameStore::new(dir.path());
+        let store = FrameStore::new(dir.as_ref());
 
         let stub_frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
