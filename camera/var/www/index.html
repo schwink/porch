@@ -104,8 +104,130 @@
     import htm from "https://unpkg.com/htm@latest?module";
     const html = htm.bind(React.createElement);
 
-    const FrameListItem = ({ frame, onDelete } = props) => {
+    const Tags = ({ frameId, setName, availableTags, initialTags, onTagsChanged } = props) => {
+      const [selectedTags, setSelectedTags] = React.useState(initialTags);
+      const tagsMap = React.useMemo(() => {
+        const result = {};
+        availableTags.forEach(t => result[t] = false);
+        (selectedTags || []).forEach(t => result[t] = true);
+        return result;
+      }, [availableTags, selectedTags]);
+      const [isSaving, setIsSaving] = React.useState(false);
+
+      function onTagsChanged(updatedTags) {
+        const saveTags = async () => {
+          if (isSaving) {
+            return;
+          }
+
+          const originalTags = selectedTags;
+          setSelectedTags(updatedTags);
+
+          setIsSaving(true);
+
+          try {
+            const response = await fetch(`/api/frames/${frameId}/tags/`, {
+              method: 'POST',
+              body: JSON.stringify({ name: setName, tags: updatedTags }),
+              headers: {
+                "Content-Type": "application/json",
+              }
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+
+            const savedTagSet = result.tagSets.find(s => s.name === setName);
+            if (savedTagSet) {
+              setSelectedTags(savedTagSet.tags);
+            }
+          } catch (error) {
+            setSelectedTags(originalTags);
+          } finally {
+            setIsSaving(false);
+          }
+        };
+
+        saveTags();
+      }
+
+      function onClick(tag) {
+        if (selectedTags && selectedTags.includes(tag)) {
+          const t = selectedTags.filter(t => t !== tag);
+          onTagsChanged(t);
+        } else {
+          const t = [tag, ...(selectedTags || [])].sort();
+          onTagsChanged(t);
+        }
+      }
+
+      function onClear() {
+        onTagsChanged([]);
+      }
+
+      return html`
+        <div>
+          <p key="name">${setName}</p>
+          <ul key="tags">
+        ${Object.keys(tagsMap).sort().map(tag => html`
+            <li key=${tag} onClick=${() => onClick(tag)}>
+              <input type="checkbox" checked=${tagsMap[tag]} readOnly onClick=${(e) => e.preventDefault()} />
+              ${tag}
+            </li> `)}
+            <li key="_none" onClick=${onClear}>
+              <input type="checkbox" checked=${selectedTags !== null && selectedTags.length === 0} readOnly onClick=${(e) => e.preventDefault()} />
+              None
+            </li>
+          </ul>
+        </div>
+      `;
+    };
+    Tags.propTypes = {
+      frameId: PropTypes.string.isRequired,
+      setName: PropTypes.string.isRequired,
+      availableTags: PropTypes.arrayOf(PropTypes.string).isRequired,
+      initialTags: PropTypes.arrayOf(PropTypes.string),
+    };
+
+    const TagSets = ({ frame, tagSets } = props) => {
+      const sets = React.useMemo(() => {
+        const sets = {};
+        tagSets.forEach(tagSet => {
+          sets[tagSet.name] = { available: tagSet.tags };
+        });
+        if (frame.labels && frame.labels.tagSets) {
+          frame.labels.tagSets.forEach(tagSet => {
+            if (!sets[tagSet.name]) {
+              sets[tagSet.name] = { available: [] };
+            }
+            sets[tagSet.name]['selected'] = tagSet.tags;
+          });
+        }
+        return sets;
+      }, [frame, tagSets]);
+
+      return html`<ul className="tag_sets">
+        ${Object.keys(sets).sort().map(setName => html`
+            <${Tags} key=${setName}
+                frameId=${frame.id}
+                setName=${setName}
+                availableTags=${sets[setName].available}
+                initialTags=${sets[setName].selected || null}
+                />
+            `)
+        }
+      </ul>`;
+    };
+
+    const FrameListItem = ({ frame, onDelete, tagSets } = props) => {
       const del = () => { onDelete(frame.id) }
+
+      var taggingUI = null;
+      if (tagSets) {
+        taggingUI = html`<${TagSets} key="tagsets" frame=${frame} tagSets=${tagSets} />`;
+      }
+
       return html`<li className="frame">
         <img src="frames/${frame.src}"></img>
         <div>
@@ -118,6 +240,8 @@
             </tbody>
           </table>
 
+          ${taggingUI}
+
           <button onClick=${del}>Delete</button>
         </div>
       </li>`;
@@ -127,7 +251,7 @@
       onDelete: PropTypes.func.isRequired,
     };
 
-    const FrameList = ({ scrollContainerRef } = props) => {
+    const FrameList = ({ scrollContainerRef, tagSets } = props) => {
       const [frames, setFrames] = React.useState([]);
 
       const [isLoading, setIsLoading] = React.useState(true);
@@ -271,7 +395,7 @@
         return html`<p>Error</p>`;
       } else {
         return html`<ul className="frame_list">
-            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.id} onDelete=${deleteFrame} />`)}
+            ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.id} onDelete=${deleteFrame} tagSets=${tagSets} />`)}
             ${isFetching && html`<li key="loading">Loading...</li>`}
             ${!hasPreviousPage && html`<li key="end">No more frames</li>`}
             ${hasPreviousPage && html`
@@ -291,8 +415,31 @@
     const App = (props) => {
       const scrollContainerRef = React.useRef();
 
+      const [isLoadingTags, setIsLoadingTags] = React.useState(true);
+      const [tagLoadError, setTagLoadError] = React.useState(null);
+      const [tagSets, setTagSets] = React.useState([]);
+
+      // Fetch labeling configuration
+      React.useEffect(() => {
+        async function fetchTags() {
+          try {
+            const response = await fetch('api/labels/tags');
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+            setTagSets(result);
+          } catch (error) {
+            setTagLoadError(error);
+          } finally {
+            setIsLoadingTags(false);
+          }
+        }
+        fetchTags();
+      }, []);
+
       return html`<div ref=${scrollContainerRef} style=${{ "height": "100%", "overflow": "auto" }}>
-          <${FrameList} key="frame_list" scrollContainerRef=${scrollContainerRef} />
+          <${FrameList} key="frame_list" scrollContainerRef=${scrollContainerRef} tagSets=${tagSets} />
         </div>`;
     }
     App.propTypes = {
