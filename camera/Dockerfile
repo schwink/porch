@@ -24,4 +24,4 @@ COPY var ./var
 
 EXPOSE 8080
 
-CMD ["./porch-camera", "/var/porch/images", "--log-dir", "/var/porch/logs"]
+CMD ["./porch-camera", "/var/porch/images", "--log-dir", "/var/porch/logs", "--labeling-config", "/etc/porch/labeling-config.json"]
