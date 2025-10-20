@@ -14,6 +14,7 @@
     div#root {
       margin: 0px;
       padding: 0px;
+      font-size: 1.2em;
     }
 
     div.live_video {
@@ -63,11 +64,42 @@
     li.frame div {
       width: fit-content;
       margin: 16px;
-      font-size: 1.2em;
     }
 
     li.frame table {
       width: auto;
+    }
+
+    ul.tag_sets {
+      list-style-type: none;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+    }
+
+    ul.tag_sets li {
+      width: 100%;
+      padding: 8px 0;
+      margin: 0;
+    }
+
+    ul.tag_sets li h2 {
+      padding: 0 0 8px 0;
+      margin: 0;
+      font-size: 1.4em;
+    }
+
+    ul.tags {
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+      border-bottom: 1px solid darkgray;
+    }
+
+    ul.tags li {
+      width: auto;
+      padding: 8px;
+      margin: 0;
     }
 
     table {
@@ -103,6 +135,21 @@
     import PropTypes from "https://unpkg.com/es-react@latest/dev/prop-types.js";
     import htm from "https://unpkg.com/htm@latest?module";
     const html = htm.bind(React.createElement);
+
+    // https://stackoverflow.com/questions/3426404/create-a-hexadecimal-colour-based-on-a-string-with-javascript
+    const stringToColor = (str) => {
+      let hash = 0;
+      str.split('').forEach(char => {
+        hash = char.charCodeAt(0) + ((hash << 5) - hash)
+      })
+      let colour = '#'
+      for (let i = 0; i < 3; i++) {
+        const value = (hash >> (i * 8)) & 0xff
+        colour += value.toString(16).padStart(2, '0')
+      }
+      return colour
+    }
+    const ColorsContext = React.createContext({});
 
     const Tags = ({ frameId, setName, availableTags, initialTags, onTagsChanged } = props) => {
       const [selectedTags, setSelectedTags] = React.useState(initialTags);
@@ -166,21 +213,31 @@
         onTagsChanged([]);
       }
 
+      const colors = React.useContext(ColorsContext);
+
+      const lis = Object.keys(tagsMap).sort().map(tag => {
+        const style = {
+          backgroundColor: colors[tag]
+        };
+
+        return html`
+              <li key=${tag} onClick=${() => onClick(tag)} style=${style}>
+                <input type="checkbox" checked=${tagsMap[tag]} readOnly onClick=${(e) => e.preventDefault()} />
+                ${tag}
+              </li>`;
+      });
+
       return html`
-        <div>
-          <p key="name">${setName}</p>
-          <ul key="tags">
-        ${Object.keys(tagsMap).sort().map(tag => html`
-            <li key=${tag} onClick=${() => onClick(tag)}>
-              <input type="checkbox" checked=${tagsMap[tag]} readOnly onClick=${(e) => e.preventDefault()} />
-              ${tag}
-            </li> `)}
+        <li>
+          <h2 key="name">${setName}</h2>
+          <ul className="tags" key="tags">
+            ${lis}
             <li key="_none" onClick=${onClear}>
               <input type="checkbox" checked=${selectedTags !== null && selectedTags.length === 0} readOnly onClick=${(e) => e.preventDefault()} />
               None
             </li>
           </ul>
-        </div>
+        </li>
       `;
     };
     Tags.propTypes = {
@@ -262,6 +319,18 @@
       const [endCursor, setEndCursor] = React.useState(null);
       const [hasPreviousPage, setHasPreviousPage] = React.useState(true);
       const [error, setError] = React.useState(false);
+
+      // Colors to visually distinguish certain UI elements that we will be selecting often
+      const colors = React.useMemo(() => {
+        const colors = {};
+        tagSets.forEach(tagSet => {
+          colors[tagSet.name] = stringToColor(tagSet.name);
+          tagSet.tags.forEach(tag => {
+            colors[tag] = stringToColor(`${tagSet.name}${tag}`) + '66';
+          });
+        });
+        return colors;
+      }, [tagSets]);
 
       const fetchData = async () => {
         if (!hasPreviousPage) {
@@ -394,7 +463,8 @@
       } else if (error) {
         return html`<p>Error</p>`;
       } else {
-        return html`<ul className="frame_list">
+        return html`<${ColorsContext.Provider} value=${colors}>
+          <ul className="frame_list">
             ${frames.map(frame => html`<${FrameListItem} frame=${frame} key=${frame.id} onDelete=${deleteFrame} tagSets=${tagSets} />`)}
             ${isFetching && html`<li key="loading">Loading...</li>`}
             ${!hasPreviousPage && html`<li key="end">No more frames</li>`}
@@ -405,7 +475,8 @@
                   </p>
                 </li>
               `}
-          </ul>`;
+          </ul>
+        </${ColorsContext.Provider}>`;
       }
     };
     FrameList.propTypes = {
