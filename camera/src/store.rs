@@ -163,7 +163,6 @@ impl FrameStore {
 
     pub async fn delete(&self, name: &str) -> Result<(), Box<dyn Error>> {
         let mut path = self.image_storage_dir.join(name);
-        info!("Trying to delete {}", path.as_os_str().to_str().unwrap());
         path.set_extension("jpg");
         let remove_jpg = tokio::fs::remove_file(&path).await;
         path.set_extension("json");

@@ -158,6 +158,8 @@ async fn api_delete_frame(
     State(state): State<WebServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiOk>, ApiError> {
+    let _ = state.label_store.delete(id.as_str()).await;
+
     state
         .frame_store
         .delete(id.as_str())

@@ -115,6 +115,14 @@ impl LabelStore {
 
         Ok(labels)
     }
+
+    pub async fn delete(&self, frame_id: &str) -> Result<(), std::io::Error> {
+        let path = self.label_file_path(frame_id);
+
+        let _lock = self.global_lock.write().await;
+
+        tokio::fs::remove_file(path).await
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +182,40 @@ mod tests {
         let actual_tags_0_tags = &actual_tags_0.tags;
         assert_eq!(actual_tags_0_tags.len(), 1);
         assert_eq!(actual_tags_0_tags.get(0).unwrap(), "foo2");
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = LabelStore::new(
+            LabelingConfig {
+                tag_sets: vec![TagSet {
+                    name: "foo".to_string(),
+                    tags: vec!["foo1".to_string(), "foo2".to_string(), "foo3".to_string()],
+                }],
+            },
+            dir.path().into(),
+        );
+
+        let tags = TagSet {
+            name: "foo".to_string(),
+            tags: vec!["foo2".to_string()],
+        };
+        store
+            .set_tags("2025-10-15_16-59-50-912_+0000", tags)
+            .await
+            .unwrap();
+
+        let actual = store.get_labels("2025-10-15_16-59-50-912_+0000").await;
+        assert_eq!(actual.is_ok(), true);
+        assert_eq!(actual.unwrap().tag_sets.len(), 1);
+
+        store.delete("2025-10-15_16-59-50-912_+0000").await.unwrap();
+
+        let actual = store.get_labels("2025-10-15_16-59-50-912_+0000").await;
+        // Returns a default one
+        assert_eq!(actual.is_ok(), true);
+        assert_eq!(actual.unwrap().tag_sets.len(), 0);
     }
 }
