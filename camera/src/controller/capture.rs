@@ -28,12 +28,11 @@ pub async fn start_capture<Tz: TimeZone>(
 
         let frame = handle.rx.recv().await?;
 
-        let p_hash_distance =
-            prev_p_hash.map(|p| hamming::distance(p.as_bytes(), &frame.p_hash.as_bytes()));
-        prev_p_hash = Some(frame.p_hash.clone());
-
+        let p_hash_distance = prev_p_hash
+            .as_ref()
+            .map(|p| hamming::distance(p.as_bytes(), &frame.p_hash.as_bytes()));
         if let Some(distance) = p_hash_distance {
-            if distance < 12 {
+            if distance < 20 {
                 info!(
                     "Skipping frame at {} due to low p hash distance of {}",
                     frame.timestamp, distance
@@ -42,6 +41,7 @@ pub async fn start_capture<Tz: TimeZone>(
                 continue;
             }
         }
+        prev_p_hash = Some(frame.p_hash.clone());
 
         match frame_store
             .write_frame_capture_data(frame, p_hash_distance)
