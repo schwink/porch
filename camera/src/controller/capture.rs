@@ -1,18 +1,22 @@
 use std::error::Error;
+use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
-use log::{error, info};
+use log::{error, info, warn};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::subscriber::DefaultGuard;
 use tracing::{Level, span};
 use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
 use tracing_subscriber::{prelude::*, registry::Registry};
 
 use crate::camera;
+use crate::inference;
 use crate::store;
 
 pub async fn start_capture<Tz: TimeZone>(
     camera_service: &camera::CameraService,
-    frame_store: &store::FrameStore,
+    frame_store: Arc<store::FrameStore>,
+    inference_service: Arc<inference::InferenceService>,
     trace_dir: &Option<std::path::PathBuf>,
     stop_time: chrono::DateTime<Tz>,
     timezone: Tz,
@@ -52,7 +56,19 @@ pub async fn start_capture<Tz: TimeZone>(
             break;
         }
 
-        let frame = handle.rx.recv().await?;
+        let frame = match handle.rx.recv().await {
+            Ok(frame) => frame,
+            Err(e) => match e {
+                RecvError::Lagged(num_dropped) => {
+                    warn!("Dropped {} frames", num_dropped);
+                    continue;
+                }
+                RecvError::Closed => {
+                    error!("Camera stream closed");
+                    break;
+                }
+            },
+        };
 
         {
             let span = span!(Level::TRACE, "frame");
@@ -73,17 +89,46 @@ pub async fn start_capture<Tz: TimeZone>(
             }
             prev_p_hash = Some(frame.p_hash.clone());
 
-            {
+            let metadata = {
                 let span = span!(Level::TRACE, "store");
                 let _enter = span.enter();
 
                 match frame_store
-                    .write_frame_capture_data(frame, p_hash_distance)
+                    .write_frame_capture_data(&frame, p_hash_distance)
                     .await
                 {
-                    Ok(metadata) => info!("Persisted frame {}", metadata.name),
+                    Ok(metadata) => {
+                        info!("Persisted frame {}", metadata.name);
+                        metadata
+                    }
                     Err(e) => {
-                        error!("Failed to persist frame: {:?}", e)
+                        error!("Failed to persist frame: {:?}", e);
+                        continue;
+                    }
+                }
+            };
+
+            let inference_service = inference_service.clone();
+            let tensor: Arc<[f32]> = frame.inference_tensor.clone();
+            {
+                let span = span!(Level::TRACE, "inference");
+                let _enter = span.enter();
+
+                let results = match inference_service.run(tensor.as_ref()) {
+                    Ok(results) => results,
+                    Err(e) => {
+                        error!("Inference failed for {}: {:?}", metadata.name, e);
+                        continue;
+                    }
+                };
+
+                match frame_store.write_inference(&frame, results).await {
+                    Ok(_) => info!("Persisted inference results for {}", metadata.name),
+                    Err(e) => {
+                        error!(
+                            "Failed to store inference results for {}: {:?}",
+                            metadata.name, e
+                        )
                     }
                 };
             }

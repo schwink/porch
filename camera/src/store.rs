@@ -47,7 +47,7 @@ impl FrameStore {
     #[tracing::instrument(level = Level::TRACE)]
     pub async fn write_frame_capture_data(
         &self,
-        frame: crate::camera::Frame,
+        frame: &crate::camera::Frame,
         p_hash_distance: Option<u64>,
     ) -> Result<FrameMetadata, Box<dyn Error>> {
         let filename = crate::api::time_to_file_basename(&frame.timestamp);
@@ -60,7 +60,7 @@ impl FrameStore {
             let frame_metadata = FrameMetadata {
                 name: filename.clone(),
                 timestamp: frame.timestamp.timestamp_millis(),
-                p_hash: frame.p_hash,
+                p_hash: frame.p_hash.clone(),
                 p_hash_distance,
             };
             let frame_metadata_json = to_string_pretty(&frame_metadata)?;
@@ -92,6 +92,23 @@ impl FrameStore {
         }
 
         Ok(frame_metadata)
+    }
+
+    #[tracing::instrument(level = Level::TRACE)]
+    pub async fn write_inference(
+        &self,
+        frame: &crate::camera::Frame,
+        inference_results: Vec<crate::inference::InferenceResult>,
+    ) -> Result<(), Box<dyn Error>> {
+        let filename = crate::api::time_to_file_basename(&frame.timestamp);
+        let mut path = self.image_storage_dir.join(&filename);
+        path.set_extension("inference.json");
+
+        let json = to_string_pretty(&inference_results)?;
+
+        tokio::fs::write(&path, json).await?;
+
+        Ok(())
     }
 
     pub async fn list_frames(
@@ -229,7 +246,7 @@ mod tests {
         };
 
         let metadata = store
-            .write_frame_capture_data(stub_frame, None)
+            .write_frame_capture_data(&stub_frame, None)
             .await
             .unwrap();
         assert_eq!(metadata.name, "2025-10-13_23-20-22-231_+0000");
@@ -263,7 +280,7 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "c41782ed3c9263cd".to_string(),
         };
-        store.write_frame_capture_data(frame, None).await.unwrap();
+        store.write_frame_capture_data(&frame, None).await.unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397623231).unwrap(),
@@ -272,7 +289,7 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "cc17c7cd3c9263cd".to_string(),
         };
-        store.write_frame_capture_data(frame, None).await.unwrap();
+        store.write_frame_capture_data(&frame, None).await.unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397624231).unwrap(),
@@ -281,7 +298,7 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "ac1387ed3c9463cd".to_string(),
         };
-        store.write_frame_capture_data(frame, None).await.unwrap();
+        store.write_frame_capture_data(&frame, None).await.unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397626231).unwrap(),
@@ -290,7 +307,7 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "541783dc1c92638c".to_string(),
         };
-        store.write_frame_capture_data(frame, None).await.unwrap();
+        store.write_frame_capture_data(&frame, None).await.unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397625231).unwrap(),
@@ -299,7 +316,7 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "4c1787683caa73cc".to_string(),
         };
-        store.write_frame_capture_data(frame, None).await.unwrap();
+        store.write_frame_capture_data(&frame, None).await.unwrap();
     }
 
     #[tokio::test]

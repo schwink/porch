@@ -10,6 +10,7 @@ use log::{error, info};
 
 use crate::camera;
 use crate::controller::capture;
+use crate::inference;
 use crate::store;
 
 /**
@@ -38,6 +39,7 @@ where
     pub fn start_with_cron(
         camera_service: Arc<camera::CameraService>,
         frame_store: Arc<store::FrameStore>,
+        inference_service: Arc<inference::InferenceService>,
         trace_dir: Option<std::path::PathBuf>,
         start_watching_cron_expression: &str,
         timezone: Tz,
@@ -63,7 +65,8 @@ where
 
                 if let Err(e) = capture::start_capture(
                     &camera_service,
-                    &frame_store,
+                    frame_store.clone(),
+                    inference_service.clone(),
                     &trace_dir,
                     stop_time,
                     timezone.clone(),

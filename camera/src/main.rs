@@ -11,6 +11,7 @@ use crate::controller::scheduled::ScheduledCapture;
 mod api;
 mod camera;
 mod controller;
+mod inference;
 mod store;
 mod training;
 mod webserver;
@@ -22,6 +23,9 @@ struct Cli {
 
     #[arg(long)]
     labeling_config: PathBuf,
+
+    #[arg(long)]
+    inference_config: PathBuf,
 
     #[arg(long)]
     log_dir: Option<PathBuf>,
@@ -88,8 +92,13 @@ async fn main() {
 
     let labeling_config = training::load_labeling_config(cli.labeling_config.as_path())
         .await
-        .unwrap();
+        .expect("Failed to load labeling config");
     let label_store = training::LabelStore::new(labeling_config, image_storage_dir.clone());
+
+    let inference_config = inference::load_inference_config(cli.inference_config.as_path())
+        .await
+        .expect("Failed to load inference config");
+    let inference_service = inference::InferenceService::new(inference_config).await;
 
     let trace_dir = cli.log_dir;
     let camera_service = camera::CameraService::new(trace_dir.clone());
@@ -108,7 +117,8 @@ async fn main() {
     if cli.start_watching_immediately {
         controller::capture::start_capture(
             &camera_service,
-            &frame_store,
+            frame_store.clone(),
+            inference_service.clone(),
             &trace_dir,
             Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::minutes(1),
             America::Los_Angeles,
@@ -120,6 +130,7 @@ async fn main() {
     let weekday_mornings = &mut ScheduledCapture::start_with_cron(
         camera_service.clone(),
         frame_store.clone(),
+        inference_service.clone(),
         trace_dir.clone(),
         // Every weekday at 7:00am, watch for three hours
         "0 0 7 * * Mon,Tue,Wed,Thu,Fri *",
@@ -132,6 +143,7 @@ async fn main() {
     let weekends = &mut ScheduledCapture::start_with_cron(
         camera_service,
         frame_store.clone(),
+        inference_service.clone(),
         trace_dir.clone(),
         // Every weekend at 7:00am, watch for six hours
         "0 0 7 * * Sat,Sun *",
