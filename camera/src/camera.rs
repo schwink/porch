@@ -4,6 +4,7 @@ use std::{
 };
 
 use log::{error, info, warn};
+use opencv::core::MatTraitConst;
 use opencv::prelude::*;
 use tokio::sync::Mutex;
 use tracing::{Level, span};
@@ -15,6 +16,12 @@ use uvc::{FrameFormat, StreamFormat};
 pub struct Frame {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub jpeg: Arc<[u8]>,
+
+    /// A RGB float32[1,3,224,224] tensor
+    pub inference_tensor: Arc<[f32]>,
+    /// JPEG of the above, for debugging
+    pub inference_jpeg: Arc<[u8]>,
+
     pub p_hash: String,
 }
 
@@ -358,34 +365,22 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         let span = span!(Level::TRACE, "turbojpeg");
         let _enter = span.enter();
 
-        let image = turbojpeg::Image {
-            format: turbojpeg::PixelFormat::RGB,
-            height: frame.height() as usize,
-            width: frame.width() as usize,
-            pixels: rgb_slice,
-            pitch: (frame.width() * 3) as usize,
-        };
-
-        let jpeg = match turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2) {
+        match to_jpg(rgb_slice, frame.height() as usize, frame.width() as usize) {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to compress frame to JPEG: {:?}", e);
                 return;
             }
-        };
-
-        let jpeg_slice: &[u8] = &jpeg;
-
-        Arc::from(jpeg_slice)
+        }
     };
 
     let mat = {
         let span = span!(Level::TRACE, "opencv_mat");
         let _enter = span.enter();
 
-        let mat = match opencv::prelude::Mat::new_rows_cols_with_bytes::<u8>(
+        match opencv::prelude::Mat::new_rows_cols_with_bytes::<opencv::core::Vec3b>(
             frame.height() as i32,
-            frame.width() as i32 * 3,
+            frame.width() as i32,
             rgb_slice,
         ) {
             Ok(m) => m,
@@ -393,8 +388,97 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
                 error!("Failed to create opencv Mat from RGB data {}", e);
                 return;
             }
+        }
+    };
+    debug_assert_eq!(mat.channels(), 3);
+
+    let (inference_tensor, inference_jpeg): (Arc<[f32]>, Arc<[u8]>) = {
+        let span = span!(Level::TRACE, "opencv_inference_input");
+        let _enter = span.enter();
+
+        let mat_224_u8 = {
+            let span = span!(Level::TRACE, "resize");
+            let _enter = span.enter();
+
+            let mut m = match unsafe {
+                opencv::prelude::Mat::new_rows_cols(224, 224, opencv::core::CV_8UC3)
+            } {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Failed to create opencv u8 Mat for 224x224: {}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = opencv::imgproc::resize(
+                &mat,
+                &mut m,
+                opencv::core::Size_ {
+                    width: 224,
+                    height: 224,
+                },
+                0 as f64,
+                0 as f64,
+                opencv::imgproc::INTER_AREA,
+            ) {
+                error!("Failed to resize image to 224x224: {}", e);
+                return;
+            };
+            debug_assert_eq!(m.size().unwrap().width, 224);
+            debug_assert_eq!(m.size().unwrap().height, 224);
+            debug_assert_eq!(m.channels(), 3);
+
+            m
         };
 
+        let jpeg_224 = {
+            let span = span!(Level::TRACE, "jpeg");
+            let _enter = span.enter();
+
+            to_jpg(
+                mat_224_u8.data_bytes().expect("Bytes from resized image"),
+                224usize,
+                224usize,
+            )
+        };
+
+        let mat_224_f32 = {
+            let span = span!(Level::TRACE, "u8_to_f32");
+            let _enter = span.enter();
+
+            let mut m = match unsafe {
+                opencv::prelude::Mat::new_rows_cols(224, 224, opencv::core::CV_32FC3)
+            } {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Failed to create opencv u8 Mat for 224x224: {}", e);
+                    return;
+                }
+            };
+
+            // Convert to a 32-bit float image, scaling values to [0.0, 1.0]
+            if let Err(e) = mat_224_u8.convert_to(&mut m, opencv::core::CV_32FC3, 1.0 / 255.0, 0.) {
+                error!("Failed to convert to opencv f32 Mat for 224x224: {}", e);
+                return;
+            };
+
+            debug_assert_eq!(m.size().unwrap().width, 224);
+            debug_assert_eq!(m.size().unwrap().height, 224);
+            debug_assert_eq!(m.channels(), 3);
+
+            m
+        };
+
+        let flat = mat_224_f32.reshape(1, 224).expect("reshape");
+        let slice: &[f32] = flat.data_typed::<f32>().unwrap();
+        debug_assert_eq!(slice.len(), 224 * 224 * 3);
+
+        (Arc::from(slice), jpeg_224.unwrap())
+    };
+
+    let mat = {
+        let span = span!(Level::TRACE, "opencv_mat_to_bgr");
+        let _enter = span.enter();
         if let Err(e) = opencv::imgproc::cvt_color(
             &mat,
             &mut mat.clone_pointee(),
@@ -434,6 +518,8 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         let frame = Frame {
             timestamp,
             jpeg: jpeg_buffer,
+            inference_tensor,
+            inference_jpeg,
             p_hash: p_hash,
         };
 
@@ -443,6 +529,22 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         };
         info!("Broadcasted a frame to {} subscribers", num_subscribers)
     }
+}
+
+fn to_jpg(rgb: &[u8], height: usize, width: usize) -> turbojpeg::Result<Arc<[u8]>> {
+    let image = turbojpeg::Image {
+        format: turbojpeg::PixelFormat::RGB,
+        height,
+        width,
+        pixels: rgb,
+        pitch: (width * 3) as usize,
+    };
+
+    let jpeg = turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2)?;
+
+    let jpeg_slice: &[u8] = &jpeg;
+
+    Ok(Arc::from(jpeg_slice))
 }
 
 #[derive(PartialEq, Eq)]

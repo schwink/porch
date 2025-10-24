@@ -63,6 +63,9 @@ impl FrameStore {
         path.set_extension("jpg");
         tokio::fs::write(&path, &frame.jpeg).await?;
 
+        path.set_extension("224.jpg");
+        tokio::fs::write(&path, &frame.inference_jpeg).await?;
+
         if let Ok(n) = self.frame_tx.send(frame_metadata.clone()) {
             info!("Broadcast new frame to {} subscribers", n);
         }
@@ -88,6 +91,10 @@ impl FrameStore {
 
             if !name.ends_with(".jpg") {
                 // We only want to list JPEG files
+                continue;
+            }
+            if name.ends_with(".224.jpg") {
+                // We only want the full-size JPEGs, not the inference previews
                 continue;
             }
             // Slice off the file extension
@@ -166,7 +173,9 @@ impl FrameStore {
         path.set_extension("jpg");
         let remove_jpg = tokio::fs::remove_file(&path).await;
         path.set_extension("json");
-        let remove_json = tokio::fs::remove_file(path).await;
+        let remove_json = tokio::fs::remove_file(&path).await;
+        path.set_extension("224.jpg");
+        let _remove_224_json = tokio::fs::remove_file(path).await;
 
         remove_jpg?;
         remove_json?;
@@ -193,6 +202,8 @@ mod tests {
         let stub_frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
             jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "c41782ed3c9263cd".to_string(),
         };
 
@@ -227,6 +238,8 @@ mod tests {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
             jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "c41782ed3c9263cd".to_string(),
         };
         store.write_frame_capture_data(frame, None).await.unwrap();
@@ -234,6 +247,8 @@ mod tests {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397623231).unwrap(),
             jpeg: Arc::from(b"qwer".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "cc17c7cd3c9263cd".to_string(),
         };
         store.write_frame_capture_data(frame, None).await.unwrap();
@@ -241,6 +256,8 @@ mod tests {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397624231).unwrap(),
             jpeg: Arc::from(b"zxcv".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "ac1387ed3c9463cd".to_string(),
         };
         store.write_frame_capture_data(frame, None).await.unwrap();
@@ -248,6 +265,8 @@ mod tests {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397626231).unwrap(),
             jpeg: Arc::from(b"jkl;".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "541783dc1c92638c".to_string(),
         };
         store.write_frame_capture_data(frame, None).await.unwrap();
@@ -255,6 +274,8 @@ mod tests {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397625231).unwrap(),
             jpeg: Arc::from(b"uiop".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "4c1787683caa73cc".to_string(),
         };
         store.write_frame_capture_data(frame, None).await.unwrap();
