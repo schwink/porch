@@ -4,8 +4,11 @@ use std::{
 };
 
 use log::{error, info, warn};
-use opencv::core::MatTraitConst;
 use opencv::prelude::*;
+use opencv::{
+    boxed_ref::BoxedRef,
+    core::{MatTraitConst, Vector},
+};
 use tokio::sync::Mutex;
 use tracing::{Level, span};
 use tracing_chrome::ChromeLayerBuilder;
@@ -347,25 +350,67 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
     let span = span!(Level::TRACE, "stream_callback");
     let _enter = span.enter();
 
-    let rgb = {
-        let span = span!(Level::TRACE, "to_rgb");
+    // The original UVC frame could use various camera formats and colorspaces, e.g. MJPEG or YUYV.
+    // UVC provides conversion methods for some formats to BGR, while others (i.e. MJPEG) only to RBG.
+    // First attempt to normalize the frame to the BGR colorspace which opencv expects.
+    let bgr_frame_conversion = {
+        let span = span!(Level::TRACE, "to_bgr");
         let _enter = span.enter();
 
-        match frame.to_rgb() {
-            Ok(f) => f,
-            Err(e) => {
-                error!("Failed to convert frame to RGB: {:?}", e);
-                return;
+        frame.to_bgr()
+    };
+
+    // Put the frame data into opencv Mat header.
+    let mat: BoxedRef<Mat> = {
+        let span = span!(Level::TRACE, "to_opencv_mat");
+        let _enter = span.enter();
+
+        match bgr_frame_conversion {
+            Ok(ref bgr_frame) => {
+                // Wrap a Mat header around the frame's BGR data
+                match opencv::prelude::Mat::new_rows_cols_with_bytes::<opencv::core::Vec3b>(
+                    frame.height() as i32,
+                    frame.width() as i32,
+                    bgr_frame.to_bytes(),
+                ) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        error!("Failed to create opencv Mat for BGR data {}", e);
+                        return;
+                    }
+                }
+            }
+            Err(_) => {
+                if frame.format() == FrameFormat::MJPEG {
+                    let span = span!(Level::TRACE, "mjpeg");
+                    let _enter = span.enter();
+
+                    match opencv::imgcodecs::imdecode(
+                        &frame.to_bytes(),
+                        opencv::imgcodecs::IMREAD_COLOR, // BGR
+                    ) {
+                        Ok(m) => m.into(),
+                        Err(e) => {
+                            error!("Failed to decode MJPEG into Mat {}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    // Could fall back to using frame.to_rgb() and doing that conversion with opencv.
+                    error!("Unupported frame format {:?}", frame.format());
+                    return;
+                }
             }
         }
     };
-    let rgb_slice: &[u8] = &rgb.to_bytes();
+    debug_assert_eq!(mat.channels(), 3);
 
     let jpeg_buffer: Arc<[u8]> = {
-        let span = span!(Level::TRACE, "turbojpeg");
+        let span = span!(Level::TRACE, "jpeg");
         let _enter = span.enter();
 
-        match to_jpg(rgb_slice, frame.height() as usize, frame.width() as usize) {
+        // Even if the original frame was MJPEG, we still do our own conversion here, because sometimes the original is not compatible with Mac/Safari.
+        match to_jpeg(&mat) {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to compress frame to JPEG: {:?}", e);
@@ -373,24 +418,6 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
             }
         }
     };
-
-    let mat = {
-        let span = span!(Level::TRACE, "opencv_mat");
-        let _enter = span.enter();
-
-        match opencv::prelude::Mat::new_rows_cols_with_bytes::<opencv::core::Vec3b>(
-            frame.height() as i32,
-            frame.width() as i32,
-            rgb_slice,
-        ) {
-            Ok(m) => m,
-            Err(e) => {
-                error!("Failed to create opencv Mat from RGB data {}", e);
-                return;
-            }
-        }
-    };
-    debug_assert_eq!(mat.channels(), 3);
 
     let (inference_tensor, inference_jpeg): (Arc<[f32]>, Arc<[u8]>) = {
         let span = span!(Level::TRACE, "opencv_inference_input");
@@ -432,14 +459,16 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         };
 
         let jpeg_224 = {
-            let span = span!(Level::TRACE, "jpeg");
+            let span = span!(Level::TRACE, "jpeg_224");
             let _enter = span.enter();
 
-            to_jpg(
-                mat_224_u8.data_bytes().expect("Bytes from resized image"),
-                224usize,
-                224usize,
-            )
+            match to_jpeg(&mat_224_u8) {
+                Ok(b) => b,
+                Err(e) => {
+                    error!("Failed to compress tensor to JPEG: {:?}", e);
+                    return;
+                }
+            }
         };
 
         let mat_224_f32 = {
@@ -473,25 +502,7 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         let slice: &[f32] = flat.data_typed::<f32>().unwrap();
         debug_assert_eq!(slice.len(), 224 * 224 * 3);
 
-        (Arc::from(slice), jpeg_224.unwrap())
-    };
-
-    let mat = {
-        let span = span!(Level::TRACE, "opencv_mat_to_bgr");
-        let _enter = span.enter();
-        if let Err(e) = opencv::imgproc::cvt_color(
-            &mat,
-            &mut mat.clone_pointee(),
-            opencv::imgproc::COLOR_RGB2BGR,
-            0,
-            // hint parameter added in opencv v4.11
-            // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        ) {
-            error!("Failed to convert RGB to BGR: {:?}", e);
-            return;
-        };
-
-        mat
+        (Arc::from(slice), jpeg_224)
     };
 
     let p_hash = {
@@ -531,20 +542,11 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
     }
 }
 
-fn to_jpg(rgb: &[u8], height: usize, width: usize) -> turbojpeg::Result<Arc<[u8]>> {
-    let image = turbojpeg::Image {
-        format: turbojpeg::PixelFormat::RGB,
-        height,
-        width,
-        pixels: rgb,
-        pitch: (width * 3) as usize,
-    };
-
-    let jpeg = turbojpeg::compress(image, 90, turbojpeg::Subsamp::Sub2x2)?;
-
-    let jpeg_slice: &[u8] = &jpeg;
-
-    Ok(Arc::from(jpeg_slice))
+fn to_jpeg(mat: &impl opencv::core::ToInputArray) -> opencv::Result<Arc<[u8]>> {
+    let mut jpeg_bytes: Vector<u8> = Vector::new();
+    let params: Vector<i32> = Vector::new();
+    opencv::imgcodecs::imencode(".jpg", mat, &mut jpeg_bytes, &params)?;
+    Ok(Arc::from(jpeg_bytes.as_slice()))
 }
 
 #[derive(PartialEq, Eq)]
