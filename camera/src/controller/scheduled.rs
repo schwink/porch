@@ -38,6 +38,7 @@ where
     pub fn start_with_cron(
         camera_service: Arc<camera::CameraService>,
         frame_store: Arc<store::FrameStore>,
+        trace_dir: Option<std::path::PathBuf>,
         start_watching_cron_expression: &str,
         timezone: Tz,
         duration: chrono::Duration,
@@ -63,6 +64,7 @@ where
                 if let Err(e) = capture::start_capture(
                     &camera_service,
                     &frame_store,
+                    &trace_dir,
                     stop_time,
                     timezone.clone(),
                 )

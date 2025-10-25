@@ -15,7 +15,7 @@ use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::{prelude::*, registry::Registry};
 use uvc::{FrameFormat, StreamFormat};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Frame {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub jpeg: Arc<[u8]>,
@@ -322,11 +322,11 @@ fn install_tracing(data: &mut StreamCallbackData, timestamp: &chrono::DateTime<c
     }
 
     let trace_dir = data.trace_dir.as_ref().unwrap();
-
-    let mut trace_file = std::path::Path::join(
-        &trace_dir,
-        crate::api::time_to_file_basename::<chrono::Utc>(timestamp),
+    let trace_file_name = format!(
+        "{}_uvc",
+        crate::api::time_to_file_basename::<chrono::Utc>(timestamp)
     );
+    let mut trace_file = trace_dir.join(trace_file_name);
     trace_file.set_extension("json");
 
     let (chrome_layer, chrome_guard) = ChromeLayerBuilder::new().file(trace_file).build();

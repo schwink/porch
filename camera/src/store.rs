@@ -5,6 +5,8 @@ use futures::{StreamExt, stream::FuturesOrdered};
 use log::{error, info};
 use std::error::Error;
 
+use tracing::{Level, span};
+
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use tokio::sync::broadcast;
@@ -17,6 +19,7 @@ pub struct FrameMetadata {
     pub p_hash_distance: Option<u64>,
 }
 
+#[derive(Debug)]
 pub struct FrameStore {
     pub image_storage_dir: Box<Path>,
     frame_tx: broadcast::Sender<FrameMetadata>,
@@ -41,6 +44,7 @@ impl FrameStore {
      * This produces files {name}.jpg and {name}.json which are consumed by the API and by later stages
      * in image processing.
      */
+    #[tracing::instrument(level = Level::TRACE)]
     pub async fn write_frame_capture_data(
         &self,
         frame: crate::camera::Frame,
@@ -49,22 +53,39 @@ impl FrameStore {
         let filename = crate::api::time_to_file_basename(&frame.timestamp);
         let mut path = self.image_storage_dir.join(&filename);
 
-        let frame_metadata = FrameMetadata {
-            name: filename.clone(),
-            timestamp: frame.timestamp.timestamp_millis(),
-            p_hash: frame.p_hash,
-            p_hash_distance,
+        let frame_metadata = {
+            let span = span!(Level::TRACE, "write_json");
+            let _enter = span.enter();
+
+            let frame_metadata = FrameMetadata {
+                name: filename.clone(),
+                timestamp: frame.timestamp.timestamp_millis(),
+                p_hash: frame.p_hash,
+                p_hash_distance,
+            };
+            let frame_metadata_json = to_string_pretty(&frame_metadata)?;
+
+            path.set_extension("json");
+            tokio::fs::write(&path, frame_metadata_json).await?;
+
+            frame_metadata
         };
-        let frame_metadata_json = to_string_pretty(&frame_metadata)?;
 
-        path.set_extension("json");
-        tokio::fs::write(&path, frame_metadata_json).await?;
+        {
+            let span = span!(Level::TRACE, "write_jpeg");
+            let _enter = span.enter();
 
-        path.set_extension("jpg");
-        tokio::fs::write(&path, &frame.jpeg).await?;
+            path.set_extension("jpg");
+            tokio::fs::write(&path, &frame.jpeg).await?;
+        }
 
-        path.set_extension("224.jpg");
-        tokio::fs::write(&path, &frame.inference_jpeg).await?;
+        {
+            let span = span!(Level::TRACE, "write_224_jpeg");
+            let _enter = span.enter();
+
+            path.set_extension("224.jpg");
+            tokio::fs::write(&path, &frame.inference_jpeg).await?;
+        }
 
         if let Ok(n) = self.frame_tx.send(frame_metadata.clone()) {
             info!("Broadcast new frame to {} subscribers", n);

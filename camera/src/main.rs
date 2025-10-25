@@ -91,7 +91,8 @@ async fn main() {
         .unwrap();
     let label_store = training::LabelStore::new(labeling_config, image_storage_dir.clone());
 
-    let camera_service = camera::CameraService::new(cli.log_dir);
+    let trace_dir = cli.log_dir;
+    let camera_service = camera::CameraService::new(trace_dir.clone());
 
     let api = api::Api::new(frame_store.clone(), label_store.clone());
 
@@ -108,7 +109,8 @@ async fn main() {
         controller::capture::start_capture(
             &camera_service,
             &frame_store,
-            Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::hours(1),
+            &trace_dir,
+            Utc::now().with_timezone(&America::Los_Angeles) + chrono::Duration::minutes(1),
             America::Los_Angeles,
         )
         .await
@@ -118,6 +120,7 @@ async fn main() {
     let weekday_mornings = &mut ScheduledCapture::start_with_cron(
         camera_service.clone(),
         frame_store.clone(),
+        trace_dir.clone(),
         // Every weekday at 7:00am, watch for three hours
         "0 0 7 * * Mon,Tue,Wed,Thu,Fri *",
         America::Los_Angeles,
@@ -129,6 +132,7 @@ async fn main() {
     let weekends = &mut ScheduledCapture::start_with_cron(
         camera_service,
         frame_store.clone(),
+        trace_dir.clone(),
         // Every weekend at 7:00am, watch for six hours
         "0 0 7 * * Sat,Sun *",
         America::Los_Angeles,
