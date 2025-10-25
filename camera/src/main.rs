@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use chrono_tz::America;
 use clap::Parser;
-use log::{LevelFilter, info};
+use log::{LevelFilter, debug, info};
+use opencv;
 
 use crate::controller::scheduled::ScheduledCapture;
 
@@ -66,6 +67,11 @@ async fn main() {
     }
 
     simplelog::CombinedLogger::init(loggers).unwrap();
+
+    debug!(
+        "opencv build information: {}",
+        opencv::core::get_build_information().unwrap_or("(unavailable)".to_string())
+    );
 
     let image_storage_dir: Box<Path> = cli.image_storage_dir.into();
     match tokio::fs::create_dir_all(image_storage_dir.clone()).await {
