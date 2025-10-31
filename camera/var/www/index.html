@@ -280,6 +280,28 @@
     const FrameListItem = ({ frame, onDelete, tagSets } = props) => {
       const del = () => { onDelete(frame.id) }
 
+      var inferenceTable = null;
+      if (frame.inference && frame.inference.length > 0) {
+        inferenceTable = html`<table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Output Key</th>
+              <th>Values</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${frame.inference.map(result => result.outputs.map(output => html`
+              <tr key=${`${result.model}-${output.key}`}>
+                <td><code>${result.model}</code></td>
+                <td><code>${output.key}</code></td>
+                <td><code>[${output.values.map(n => n.toPrecision(4)).join(', ')}]</code></td>
+              </tr>
+            `))}
+          </tbody>
+        </table>`;
+      }
+
       var taggingUI = null;
       if (tagSets) {
         taggingUI = html`<${TagSets} key="tagsets" frame=${frame} tagSets=${tagSets} />`;
@@ -296,6 +318,8 @@
             <tr><td>Perceptual Hash Distance:</td><td><code>${frame.p_hash_distance}</code></td></tr>
             </tbody>
           </table>
+
+          ${inferenceTable}
 
           ${taggingUI}
 
