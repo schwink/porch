@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use futures::{StreamExt, stream::FuturesOrdered};
 
-use log::{error, info};
+use log::{debug, error, info};
 use std::error::Error;
 
 use tracing::{Level, span};
@@ -19,16 +19,22 @@ pub struct FrameMetadata {
     pub p_hash_distance: Option<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct FrameStoreEntry {
+    pub metadata: FrameMetadata,
+    pub inference: Option<Vec<crate::inference::InferenceResult>>,
+}
+
 #[derive(Debug)]
 pub struct FrameStore {
     pub image_storage_dir: Box<Path>,
-    frame_tx: broadcast::Sender<FrameMetadata>,
-    pub frame_rx: broadcast::Receiver<FrameMetadata>,
+    frame_tx: broadcast::Sender<FrameStoreEntry>,
+    pub frame_rx: broadcast::Receiver<FrameStoreEntry>,
 }
 
 impl FrameStore {
     pub fn new(image_storage_dir: &Path) -> Arc<FrameStore> {
-        let (frame_tx, frame_rx) = broadcast::channel::<FrameMetadata>(32);
+        let (frame_tx, frame_rx) = broadcast::channel::<FrameStoreEntry>(32);
 
         Arc::new(FrameStore {
             image_storage_dir: Box::from(image_storage_dir),
@@ -49,7 +55,8 @@ impl FrameStore {
         &self,
         frame: &crate::camera::Frame,
         p_hash_distance: Option<u64>,
-    ) -> Result<FrameMetadata, Box<dyn Error>> {
+        inference_results: Option<Vec<crate::inference::InferenceResult>>,
+    ) -> Result<FrameStoreEntry, Box<dyn Error>> {
         let filename = crate::api::time_to_file_basename(&frame.timestamp);
         let mut path = self.image_storage_dir.join(&filename);
 
@@ -83,25 +90,37 @@ impl FrameStore {
             let span = span!(Level::TRACE, "write_224_jpeg");
             let _enter = span.enter();
 
+            let mut path = path.clone();
             path.set_extension("224.jpg");
             tokio::fs::write(&path, &frame.inference_jpeg).await?;
         }
 
-        if let Ok(n) = self.frame_tx.send(frame_metadata.clone()) {
+        if let Some(ref inference) = inference_results {
+            let span = span!(Level::TRACE, "write_inference_json");
+            let _enter = span.enter();
+
+            self.write_inference(&filename, inference).await?;
+        }
+
+        let entry = FrameStoreEntry {
+            metadata: frame_metadata,
+            inference: inference_results,
+        };
+
+        if let Ok(n) = self.frame_tx.send(entry.clone()) {
             info!("Broadcast new frame to {} subscribers", n);
         }
 
-        Ok(frame_metadata)
+        Ok(entry)
     }
 
     #[tracing::instrument(level = Level::TRACE)]
     pub async fn write_inference(
         &self,
-        frame: &crate::camera::Frame,
-        inference_results: Vec<crate::inference::InferenceResult>,
+        frame_name: &str,
+        inference_results: &Vec<crate::inference::InferenceResult>,
     ) -> Result<(), Box<dyn Error>> {
-        let filename = crate::api::time_to_file_basename(&frame.timestamp);
-        let mut path = self.image_storage_dir.join(&filename);
+        let mut path = self.image_storage_dir.join(&frame_name);
         path.set_extension("inference.json");
 
         let json = to_string_pretty(&inference_results)?;
@@ -117,7 +136,7 @@ impl FrameStore {
         before: Option<String>,
         first: Option<usize>,
         after: Option<String>,
-    ) -> Result<Vec<FrameMetadata>, Box<dyn Error>> {
+    ) -> Result<Vec<FrameStoreEntry>, Box<dyn Error>> {
         let mut ls = tokio::fs::read_dir(self.image_storage_dir.as_ref()).await?;
 
         let mut entries: Vec<tokio::fs::DirEntry> = Vec::new();
@@ -166,16 +185,16 @@ impl FrameStore {
         // Maximum page size
         entries.truncate(100);
 
-        let frames: Vec<FrameMetadata> = entries
+        let frames: Vec<FrameStoreEntry> = entries
             .into_iter()
-            .map(async |e| -> Result<FrameMetadata, ()> {
+            .map(async |e| -> Result<FrameStoreEntry, ()> {
                 // We know from above that the file name is valid UTF-8, i.e. can be a String
                 let jpg_file_name = e.file_name().into_string().unwrap();
 
-                let mut json_file_path = e.path();
-                json_file_path.set_extension("json");
+                let mut file_path = e.path();
+                file_path.set_extension("json");
 
-                let serialized_metadata = match tokio::fs::read(json_file_path).await {
+                let serialized_metadata = match tokio::fs::read(&file_path).await {
                     Ok(s) => s,
                     Err(e) => {
                         error!(
@@ -185,7 +204,7 @@ impl FrameStore {
                         return Err(());
                     }
                 };
-                Ok(match serde_json::from_slice(&serialized_metadata) {
+                let metadata = match serde_json::from_slice(&serialized_metadata) {
                     Ok(m) => m,
                     Err(e) => {
                         error!(
@@ -194,6 +213,35 @@ impl FrameStore {
                         );
                         return Err(());
                     }
+                };
+
+                let inference: Option<Vec<crate::inference::InferenceResult>> = {
+                    let mut file_path = file_path.clone();
+                    file_path.set_extension("inference.json");
+
+                    match tokio::fs::read(&file_path).await {
+                        Err(_) => {
+                            debug!("No inference file for {:?}", jpg_file_name);
+                            None
+                        }
+                        Ok(serialized_inference) => {
+                            match serde_json::from_slice(&serialized_inference) {
+                                Ok(i) => Some(i),
+                                Err(e) => {
+                                    error!(
+                                        "Failed to parse inference file for {:?}: {:?}",
+                                        jpg_file_name, e
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                    }
+                };
+
+                Ok(FrameStoreEntry {
+                    metadata,
+                    inference,
                 })
             })
             // Collect into a FuturesUnordered to run the file reads in parallel
@@ -212,8 +260,10 @@ impl FrameStore {
         let remove_jpg = tokio::fs::remove_file(&path).await;
         path.set_extension("json");
         let remove_json = tokio::fs::remove_file(&path).await;
-        path.set_extension("224.jpg");
-        let _remove_224_json = tokio::fs::remove_file(path).await;
+        path.clone().set_extension("224.jpg");
+        let _remove_224_jpg = tokio::fs::remove_file(&path).await;
+        path.clone().set_extension("inference.json");
+        let _remove_inference_json = tokio::fs::remove_file(&path).await;
 
         remove_jpg?;
         remove_json?;
@@ -245,13 +295,13 @@ mod tests {
             p_hash: "c41782ed3c9263cd".to_string(),
         };
 
-        let metadata = store
-            .write_frame_capture_data(&stub_frame, None)
+        let entry = store
+            .write_frame_capture_data(&stub_frame, None, Some(vec![]))
             .await
             .unwrap();
-        assert_eq!(metadata.name, "2025-10-13_23-20-22-231_+0000");
-        assert_eq!(metadata.p_hash, "c41782ed3c9263cd");
-        assert_eq!(metadata.p_hash_distance, None);
+        assert_eq!(entry.metadata.name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(entry.metadata.p_hash, "c41782ed3c9263cd");
+        assert_eq!(entry.metadata.p_hash_distance, None);
     }
 
     #[test]
@@ -280,7 +330,10 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "c41782ed3c9263cd".to_string(),
         };
-        store.write_frame_capture_data(&frame, None).await.unwrap();
+        store
+            .write_frame_capture_data(&frame, None, Some(vec![]))
+            .await
+            .unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397623231).unwrap(),
@@ -289,7 +342,10 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "cc17c7cd3c9263cd".to_string(),
         };
-        store.write_frame_capture_data(&frame, None).await.unwrap();
+        store
+            .write_frame_capture_data(&frame, None, Some(vec![]))
+            .await
+            .unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397624231).unwrap(),
@@ -298,7 +354,10 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "ac1387ed3c9463cd".to_string(),
         };
-        store.write_frame_capture_data(&frame, None).await.unwrap();
+        store
+            .write_frame_capture_data(&frame, None, Some(vec![]))
+            .await
+            .unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397626231).unwrap(),
@@ -307,7 +366,10 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "541783dc1c92638c".to_string(),
         };
-        store.write_frame_capture_data(&frame, None).await.unwrap();
+        store
+            .write_frame_capture_data(&frame, None, None)
+            .await
+            .unwrap();
 
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397625231).unwrap(),
@@ -316,7 +378,10 @@ mod tests {
             inference_jpeg: Arc::from(b"qwer".as_slice()),
             p_hash: "4c1787683caa73cc".to_string(),
         };
-        store.write_frame_capture_data(&frame, None).await.unwrap();
+        store
+            .write_frame_capture_data(&frame, None, None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -330,11 +395,26 @@ mod tests {
         let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
 
         assert_eq!(ls.len(), 5);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
-        assert_eq!(ls.get(2).unwrap().name, "2025-10-13_23-20-24-231_+0000");
-        assert_eq!(ls.get(3).unwrap().name, "2025-10-13_23-20-23-231_+0000");
-        assert_eq!(ls.get(4).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-26-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
+        assert_eq!(
+            ls.get(2).unwrap().metadata.name,
+            "2025-10-13_23-20-24-231_+0000"
+        );
+        assert_eq!(
+            ls.get(3).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
+        assert_eq!(
+            ls.get(4).unwrap().metadata.name,
+            "2025-10-13_23-20-22-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -349,8 +429,14 @@ mod tests {
 
         assert_eq!(ls.len(), 2);
         // The two most recent ones, per "last: 2"
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-26-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -372,8 +458,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(ls.len(), 2);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-23-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-22-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -395,7 +487,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(ls.len(), 1);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-23-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -431,8 +526,14 @@ mod tests {
 
         assert_eq!(ls.len(), 2);
         // The two most oldest ones, per "first: 2"
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-23-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-22-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -454,8 +555,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(ls.len(), 2);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-26-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -477,7 +584,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(ls.len(), 1);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-25-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -520,8 +630,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(ls.len(), 2);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-25-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-24-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-24-231_+0000"
+        );
     }
 
     #[tokio::test]
@@ -556,19 +672,183 @@ mod tests {
 
         let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
         assert_eq!(ls.len(), 5);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
-        assert_eq!(ls.get(2).unwrap().name, "2025-10-13_23-20-24-231_+0000");
-        assert_eq!(ls.get(3).unwrap().name, "2025-10-13_23-20-23-231_+0000");
-        assert_eq!(ls.get(4).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-26-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
+        assert_eq!(
+            ls.get(2).unwrap().metadata.name,
+            "2025-10-13_23-20-24-231_+0000"
+        );
+        assert_eq!(
+            ls.get(3).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
+        assert_eq!(
+            ls.get(4).unwrap().metadata.name,
+            "2025-10-13_23-20-22-231_+0000"
+        );
 
         store.delete("2025-10-13_23-20-24-231_+0000").await.unwrap();
 
         let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
         assert_eq!(ls.len(), 4);
-        assert_eq!(ls.get(0).unwrap().name, "2025-10-13_23-20-26-231_+0000");
-        assert_eq!(ls.get(1).unwrap().name, "2025-10-13_23-20-25-231_+0000");
-        assert_eq!(ls.get(2).unwrap().name, "2025-10-13_23-20-23-231_+0000");
-        assert_eq!(ls.get(3).unwrap().name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(
+            ls.get(0).unwrap().metadata.name,
+            "2025-10-13_23-20-26-231_+0000"
+        );
+        assert_eq!(
+            ls.get(1).unwrap().metadata.name,
+            "2025-10-13_23-20-25-231_+0000"
+        );
+        assert_eq!(
+            ls.get(2).unwrap().metadata.name,
+            "2025-10-13_23-20-23-231_+0000"
+        );
+        assert_eq!(
+            ls.get(3).unwrap().metadata.name,
+            "2025-10-13_23-20-22-231_+0000"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stores_inference_none() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        let frame = camera::Frame {
+            timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
+            jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
+            p_hash: "c41782ed3c9263cd".to_string(),
+        };
+        store
+            .write_frame_capture_data(&frame, None, None)
+            .await
+            .unwrap();
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+
+        assert_eq!(ls.len(), 1);
+        let actual_frame = ls.get(0).unwrap();
+        assert_eq!(actual_frame.metadata.name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(actual_frame.inference.is_none(), true);
+    }
+
+    #[tokio::test]
+    async fn test_stores_inference_empty() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        let frame = camera::Frame {
+            timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
+            jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
+            p_hash: "c41782ed3c9263cd".to_string(),
+        };
+        store
+            .write_frame_capture_data(&frame, None, Some(vec![]))
+            .await
+            .unwrap();
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+
+        assert_eq!(ls.len(), 1);
+        let actual_frame = ls.get(0).unwrap();
+        assert_eq!(actual_frame.metadata.name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(actual_frame.inference.is_some(), true);
+        let actual_inference = actual_frame.inference.as_ref().unwrap();
+        assert_eq!(actual_inference.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_stores_inference_result_empty_outputs() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        let frame = camera::Frame {
+            timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
+            jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
+            p_hash: "c41782ed3c9263cd".to_string(),
+        };
+
+        let inference = vec![crate::inference::InferenceResult {
+            model: "test-model".to_string(),
+            outputs: vec![],
+        }];
+        store
+            .write_frame_capture_data(&frame, None, Some(inference))
+            .await
+            .unwrap();
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+
+        assert_eq!(ls.len(), 1);
+        let actual_frame = ls.get(0).unwrap();
+        assert_eq!(actual_frame.metadata.name, "2025-10-13_23-20-22-231_+0000");
+        assert_eq!(actual_frame.inference.is_some(), true);
+        let actual_inference = actual_frame.inference.as_ref().unwrap();
+        assert_eq!(actual_inference.len(), 1);
+        let actual_inference_result = actual_inference.get(0).unwrap();
+        assert_eq!(actual_inference_result.model, "test-model");
+        assert_eq!(actual_inference_result.outputs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_stores_inference_result() {
+        let dir = tempdir().expect("Failed to create temporary directory");
+
+        let store = FrameStore::new(dir.path());
+
+        let frame = camera::Frame {
+            timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),
+            jpeg: Arc::from(b"asdf".as_slice()),
+            inference_tensor: Arc::from([0.]),
+            inference_jpeg: Arc::from(b"qwer".as_slice()),
+            p_hash: "c41782ed3c9263cd".to_string(),
+        };
+
+        let inference = vec![crate::inference::InferenceResult {
+            model: "test-model".to_string(),
+            outputs: vec![crate::inference::InferenceOutput {
+                key: "output_key_1".to_string(),
+                values: vec![0.95, 0.05],
+            }],
+        }];
+        store
+            .write_frame_capture_data(&frame, None, Some(inference))
+            .await
+            .unwrap();
+
+        let ls = store.list_frames(Some(5), None, None, None).await.unwrap();
+
+        assert_eq!(ls.len(), 1);
+        let actual_frame = ls.get(0).unwrap();
+        assert_eq!(actual_frame.metadata.name, "2025-10-13_23-20-22-231_+0000");
+
+        assert_eq!(actual_frame.inference.is_some(), true);
+        let actual_inference = actual_frame.inference.as_ref().unwrap();
+
+        assert_eq!(actual_inference.len(), 1);
+        let actual_inference_result = actual_inference.get(0).unwrap();
+        assert_eq!(actual_inference_result.model, "test-model");
+
+        assert_eq!(actual_inference_result.outputs.len(), 1);
+        let actual_inference_output = actual_inference_result.outputs.get(0).unwrap();
+        assert_eq!(actual_inference_output.key, "output_key_1");
+        assert_eq!(actual_inference_output.values.len(), 2);
+        assert_eq!(actual_inference_output.values.get(0).unwrap(), &0.95);
+        assert_eq!(actual_inference_output.values.get(1).unwrap(), &0.05);
     }
 }

@@ -250,20 +250,21 @@ impl IntoResponse for crate::api::ApiError {
     }
 }
 
-impl Into<crate::api::FrameEdge> for crate::store::FrameMetadata {
+impl Into<crate::api::FrameEdge> for crate::store::FrameStoreEntry {
     fn into(self) -> crate::api::FrameEdge {
         let frame = crate::api::Frame {
-            id: self.name.clone(),
-            src: format!("{}.jpg", self.name),
-            timestamp: self.timestamp,
-            p_hash: self.p_hash,
-            p_hash_distance: self.p_hash_distance,
+            id: self.metadata.name.clone(),
+            src: format!("{}.jpg", self.metadata.name),
+            timestamp: self.metadata.timestamp,
+            p_hash: self.metadata.p_hash,
+            p_hash_distance: self.metadata.p_hash_distance,
             // These are newly captured frames, so they have no labels yet
             labels: None,
+            inference: self.inference,
         };
         crate::api::FrameEdge {
             node: frame,
-            cursor: self.name,
+            cursor: self.metadata.name,
         }
     }
 }

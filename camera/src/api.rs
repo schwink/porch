@@ -5,6 +5,7 @@ use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 use serde::{Deserialize, Serialize};
 
+use crate::inference;
 use crate::store;
 use crate::training;
 
@@ -16,6 +17,7 @@ pub struct Frame {
     pub p_hash: String,
     pub p_hash_distance: Option<u64>,
     pub labels: Option<training::Labels>,
+    pub inference: Option<Vec<inference::InferenceResult>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -97,7 +99,7 @@ impl Api {
         last: Option<usize>,
         before: Option<String>,
     ) -> Result<Frames, ApiError> {
-        let frame_metadatas = self
+        let store_entries = self
             .frame_store
             .list_frames(last, before, None, None)
             .await
@@ -106,18 +108,19 @@ impl Api {
                 message: e.to_string(),
             })?;
 
-        let frames: Vec<Frame> = frame_metadatas
+        let frames: Vec<Frame> = store_entries
             .into_iter()
-            .map(async |metadata| {
-                let labels = self.label_store.get_labels(&metadata.name).await;
+            .map(async |entry| {
+                let labels = self.label_store.get_labels(&entry.metadata.name).await;
 
                 Frame {
-                    id: metadata.name.clone(),
-                    src: format!("{}.jpg", metadata.name),
-                    timestamp: metadata.timestamp,
-                    p_hash: metadata.p_hash,
-                    p_hash_distance: metadata.p_hash_distance,
+                    id: entry.metadata.name.clone(),
+                    src: format!("{}.jpg", entry.metadata.name),
+                    timestamp: entry.metadata.timestamp,
+                    p_hash: entry.metadata.p_hash,
+                    p_hash_distance: entry.metadata.p_hash_distance,
                     labels: labels.ok(),
+                    inference: entry.inference,
                 }
             })
             // Collect into a FuturesUnordered to run the file reads in parallel

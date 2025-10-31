@@ -89,49 +89,37 @@ pub async fn start_capture<Tz: TimeZone>(
             }
             prev_p_hash = Some(frame.p_hash.clone());
 
-            let metadata = {
-                let span = span!(Level::TRACE, "store");
+            let inference_result = {
+                let span = span!(Level::TRACE, "inference");
                 let _enter = span.enter();
 
-                match frame_store
-                    .write_frame_capture_data(&frame, p_hash_distance)
-                    .await
-                {
-                    Ok(metadata) => {
-                        info!("Persisted frame {}", metadata.name);
-                        metadata
-                    }
+                let tensor: &[f32] = frame.inference_tensor.as_ref();
+
+                match inference_service.run(tensor) {
+                    Ok(results) => Some(results),
                     Err(e) => {
-                        error!("Failed to persist frame: {:?}", e);
-                        continue;
+                        error!("Inference failed: {:?}", e);
+                        None
                     }
                 }
             };
 
-            let inference_service = inference_service.clone();
-            let tensor: Arc<[f32]> = frame.inference_tensor.clone();
             {
-                let span = span!(Level::TRACE, "inference");
+                let span = span!(Level::TRACE, "store");
                 let _enter = span.enter();
 
-                let results = match inference_service.run(tensor.as_ref()) {
-                    Ok(results) => results,
-                    Err(e) => {
-                        error!("Inference failed for {}: {:?}", metadata.name, e);
-                        continue;
+                match frame_store
+                    .write_frame_capture_data(&frame, p_hash_distance, inference_result)
+                    .await
+                {
+                    Ok(entry) => {
+                        info!("Persisted frame {}", entry.metadata.name);
                     }
-                };
-
-                match frame_store.write_inference(&frame, results).await {
-                    Ok(_) => info!("Persisted inference results for {}", metadata.name),
                     Err(e) => {
-                        error!(
-                            "Failed to store inference results for {}: {:?}",
-                            metadata.name, e
-                        )
+                        error!("Failed to persist frame: {:?}", e);
                     }
-                };
-            }
+                }
+            };
         }
     }
 
