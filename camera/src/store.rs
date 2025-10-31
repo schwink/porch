@@ -95,6 +95,17 @@ impl FrameStore {
             tokio::fs::write(&path, &frame.inference_jpeg).await?;
         }
 
+        {
+            let span = span!(Level::TRACE, "write_tensor");
+            let _enter = span.enter();
+
+            let mut path = path.clone();
+            path.set_extension("tensor_f32.json");
+
+            let tensor_json = to_string_pretty(&*frame.inference_tensor)?;
+            tokio::fs::write(&path, tensor_json).await?;
+        }
+
         if let Some(ref inference) = inference_results {
             let span = span!(Level::TRACE, "write_inference_json");
             let _enter = span.enter();
