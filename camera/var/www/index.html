@@ -295,7 +295,7 @@
               <tr key=${`${result.model}-${output.key}`}>
                 <td><code>${result.model}</code></td>
                 <td><code>${output.key}</code></td>
-                <td><code>[${output.values.map(n => n.toPrecision(4)).join(', ')}]</code></td>
+                <td><code>[${output.valuesSoftmax.map(n => n.toPrecision(4)).join(', ')}]</code></td>
               </tr>
             `))}
           </tbody>

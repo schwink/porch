@@ -38,6 +38,8 @@ pub struct InferenceResult {
 pub struct InferenceOutput {
     pub key: String,
     pub values: Vec<f32>,
+    #[serde(rename = "valuesSoftmax")]
+    pub values_softmax: Vec<f32>,
 }
 
 pub struct InferenceService {
@@ -120,16 +122,18 @@ impl InferenceService {
                 let outputs: Vec<InferenceOutput> = session_outputs
                     .into_iter()
                     .map(|(k, v)| {
-                        let values = match v.try_extract_array::<f32>() {
+                        let values: Vec<f32> = match v.try_extract_array::<f32>() {
                             Ok(array) => array.into_iter().copied().collect(),
                             Err(e) => {
                                 error!("Failed to coerce output for {} into floats: {:?}", k, e);
                                 return Err(e);
                             }
                         };
+                        let values_softmax = softmax(&values);
                         Ok(InferenceOutput {
                             key: k.into(),
                             values,
+                            values_softmax,
                         })
                     })
                     .filter_map(Result::ok)
@@ -145,4 +149,20 @@ impl InferenceService {
 
         Ok(outputs)
     }
+}
+
+fn softmax(input: &[f32]) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    // Find the maximum value for numerical stability
+    let max_val = input.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+
+    // Exponentiate and sum
+    let exp_values: Vec<f32> = input.iter().map(|&x| (x - max_val).exp()).collect();
+    let sum_exp_values: f32 = exp_values.iter().sum();
+
+    // Normalize to get probabilities
+    exp_values.into_iter().map(|x| x / sum_exp_values).collect()
 }

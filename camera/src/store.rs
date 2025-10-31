@@ -824,6 +824,7 @@ mod tests {
             outputs: vec![crate::inference::InferenceOutput {
                 key: "output_key_1".to_string(),
                 values: vec![0.95, 0.05],
+                values_softmax: vec![0.95, 0.05],
             }],
         }];
         store
