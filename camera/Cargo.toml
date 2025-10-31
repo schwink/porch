@@ -20,6 +20,7 @@ ort = "=2.0.0-rc.10"
 serde = {version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 simplelog = "0.12.2"
+tch = "0.19.0"
 tokio = { version = "1.47.1", features = [ "fs", "macros", "rt", "rt-multi-thread", "sync", "time" ] }
 tower-http = { version="0.6.6", features = ["fs"] }
 tracing = "0.1.41"

@@ -1,14 +1,12 @@
 use std::{
+    ops::Mul,
     sync::{Arc, Weak},
     time::Duration,
 };
 
 use log::{error, info, warn};
 use opencv::prelude::*;
-use opencv::{
-    boxed_ref::BoxedRef,
-    core::{MatTraitConst, Vector},
-};
+use opencv::{boxed_ref::BoxedRef, core::Vector};
 use tokio::sync::Mutex;
 use tracing::{Level, span};
 use tracing_chrome::ChromeLayerBuilder;
@@ -471,23 +469,29 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
             }
         };
 
-        let mat_224_f32 = {
-            let span = span!(Level::TRACE, "u8_to_f32");
+        let mat_224_u8_rgb = {
+            let span = span!(Level::TRACE, "bgr_to_rgb");
             let _enter = span.enter();
 
             let mut m = match unsafe {
-                opencv::prelude::Mat::new_rows_cols(224, 224, opencv::core::CV_32FC3)
+                opencv::prelude::Mat::new_rows_cols(224, 224, opencv::core::CV_8UC3)
             } {
                 Ok(m) => m,
                 Err(e) => {
-                    error!("Failed to create opencv u8 Mat for 224x224: {}", e);
+                    error!("Failed to create opencv u8 Mat for 224x224 RGB: {}", e);
                     return;
                 }
             };
 
-            // Convert to a 32-bit float image, scaling values to [0.0, 1.0]
-            if let Err(e) = mat_224_u8.convert_to(&mut m, opencv::core::CV_32FC3, 1.0 / 255.0, 0.) {
-                error!("Failed to convert to opencv f32 Mat for 224x224: {}", e);
+            if let Err(e) = opencv::imgproc::cvt_color(
+                &mat_224_u8,
+                &mut m,
+                opencv::imgproc::COLOR_BGR2RGB,
+                0,
+                // hint parameter added in opencv v4.11
+                // opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+            ) {
+                error!("Failed to convert BGR to RGB: {}", e);
                 return;
             };
 
@@ -498,11 +502,36 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
             m
         };
 
-        let flat = mat_224_f32.reshape(1, 224).expect("reshape");
-        let slice: &[f32] = flat.data_typed::<f32>().unwrap();
-        debug_assert_eq!(slice.len(), 224 * 224 * 3);
+        let tensor: Arc<[f32]> = {
+            let span = span!(Level::TRACE, "u8_to_f32");
+            let _enter = span.enter();
 
-        (Arc::from(slice), jpeg_224)
+            let tensor_224_u8_rgb = tch::Tensor::from_data_size(
+                mat_224_u8_rgb.data_bytes().unwrap(),
+                &[224, 224, 3],
+                tch::Kind::Uint8,
+            );
+            // Convert from Height-Width-Channels to Channels-Height-Width
+            let tensor_224_u8_rgb = tensor_224_u8_rgb.permute(&[2, 0, 1]);
+            // Add dimension of size 1 at front
+            let tensor_224_u8_rgb = tensor_224_u8_rgb.unsqueeze(0);
+
+            // f32 tensor with values between 0.0 and 1.0
+            let tensor_224_f32: tch::Tensor = tensor_224_u8_rgb
+                .to_kind(tch::Kind::Float)
+                .mul(1. / 256.)
+                .reshape(-1)
+                .contiguous();
+
+            let flat: Vec<f32> =
+                Vec::<f32>::try_from(tensor_224_f32).expect("wrong type of tensor");
+
+            let slice: &[f32] = flat.as_slice();
+            debug_assert_eq!(slice.len(), 224 * 224 * 3);
+            Arc::from(slice)
+        };
+
+        (tensor, jpeg_224)
     };
 
     let p_hash = {

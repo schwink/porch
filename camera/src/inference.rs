@@ -88,8 +88,8 @@ impl InferenceService {
         Arc::new(InferenceService { models })
     }
 
-    pub fn run(&self, image: &[f32]) -> Result<Vec<InferenceResult>, Box<dyn Error>> {
-        let tensor = ort::value::TensorRef::from_array_view(([1usize, 3, 224, 224], image))?;
+    pub fn run(&self, tensor_224: &[f32]) -> Result<Vec<InferenceResult>, Box<dyn Error>> {
+        let tensor = ort::value::TensorRef::from_array_view(([1usize, 3, 224, 224], tensor_224))?;
 
         let outputs: Vec<InferenceResult> = self
             .models

@@ -7,14 +7,16 @@ COPY src ./src
 COPY vendor ./vendor
 
 RUN apt update
-RUN apt install -y clang cmake libopencv-dev
+RUN apt install -y clang cmake libopencv-dev libtorch-dev
+
+ENV LIBTORCH=/usr
 
 RUN cargo build --release
 
 FROM debian:stable-slim
 
 RUN apt update
-RUN apt install -y curl libopencv-contrib410
+RUN apt install -y curl libopencv-contrib410 libtorch2.6
 RUN rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

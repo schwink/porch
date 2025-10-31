@@ -9,10 +9,6 @@ It's necessary to build uvc from master, due to some out of date yanked dependen
 In the project root directory,
 `git submodule update --init --recursive`
 
-### turbojpeg
-
-`brew install cmake`
-
 ### opencv
 
 `brew install opencv`
@@ -20,6 +16,18 @@ In the project root directory,
 The current version in Homebrew is `v4.12`, while `v4.10` is available in `debian:stable-slim` in our Dockerfile. Unfortunately, `v4.11` changed the signature of `opencv::imgproc::cvt_color`.
 
 In the meantime, I am just commenting out the AlgoHint parameter when building for Docker.
+
+### libtorch
+
+The tch version is pinned to v0.19 instead of latest version v0.22 because our Debian docker image only has libtorch2.6.
+
+For Mac, unfortunately libtorch v2.9 is what's available in homebrew. However, tch v0.19 seems to build fine against libtorch 2.9, though current tch v0.22 does not build against libtorch v2.6. Anyway, the dream of compiling for both platforms without manual setup lives on for now.
+
+```
+brew install pytorch
+
+export LIBTORCH=/Users/schwink/homebrew/Cellar/pytorch/2.9.0_1/
+```
 
 ## Architecture
 
