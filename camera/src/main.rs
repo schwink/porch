@@ -52,7 +52,11 @@ async fn main() {
     if let Some(log_dir) = &cli.log_dir {
         match tokio::fs::create_dir_all(log_dir).await {
             Ok(_) => {
-                let log_path = log_dir.join("porch.log");
+                let log_file_name = format!(
+                    "porch_{}.log",
+                    api::time_to_file_basename::<chrono::Utc>(&Utc::now())
+                );
+                let log_path = log_dir.join(log_file_name);
                 if let Ok(log_file) = std::fs::File::create(&log_path) {
                     println!("Logging to {:?}", log_path);
                     loggers.push(simplelog::WriteLogger::new(
