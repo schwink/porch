@@ -1,0 +1,21 @@
+---
+layout: post
+title:  "Hardware and sysadmin"
+date:   2025-09-22 19:55:42 -0800
+categories: arm sbc linux ubuntu orangepi
+---
+Years ago, I bought a cheap Logitec C310 webcam that I never wound up using, and which was soon obsoleted as the quality of laptop built-in webcams increased. This would become the foundation of the image capture project.
+
+In need of a small always-on computer with WiFi and USB, I seized the opportunity to acquire an ARM SBC. I ultimately selected an [OrangePi 3 LTS](http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/details/orange-pi-3-LTS.html), bundled with a case and power supply for $60.
+
+## Sysadmin in the age of Docker
+
+I installed OrangePi's build of Ubuntu per their instructions and set up the system as usual, making sure to edit `sources.list` to change back to US mirrors from the `tsinghua.edu.cn` ones that were originally configured.
+
+I have maintained Linux machines in some capacity since high school, typically favoring Debian or Ubuntu. In the old days I went to the trouble of creating my own `deb`s to manage services on [schwink.net](https://schwink.net), but for this project I jumped ship to Docker, and I have been impressed. The dependency on an external service for deployment is annoying (I just use ghcr.io), but it becomes so easy to define dependencies and start/stop the service.
+
+## Camera limitations
+
+The [Logitec website](https://www.logitech.com/en-us/shop/p/c310-hd-webcam) tells me that my C310 camera is 1.2 MegaPixels with a 60 degree field of view and fixed focal length. (Incidentally, I am astonished that they are still being sold new, ten years or more after I bought this one.)
+
+I originally intended to make an app to watch for the neighborhood cat in my backyard, but the little webcam was not up to this task. Instead, it morphed into an idea to track my family and I getting out of the house on weekday mornings, a process I have been hoping to optimize.
