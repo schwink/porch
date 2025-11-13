@@ -2,20 +2,28 @@
 layout: post
 title:  "Hardware and sysadmin"
 date:   2025-09-22 19:55:42 -0800
-categories: arm sbc linux ubuntu orangepi
+tags: arm sbc linux ubuntu orangepi
 ---
-Years ago, I bought a cheap Logitec C310 webcam that I never wound up using, and which was soon obsoleted as the quality of laptop built-in webcams increased. This would become the foundation of the image capture project.
+Years ago, I bought a cheap Logitec C310 webcam that I never wound up using, and which was soon obsoleted as the quality of built-in laptop ebcams increased. Finding this camera in a box during a recent house move was the foundation of this image capture project.
 
-In need of a small always-on computer with WiFi and USB, I seized the opportunity to acquire an ARM SBC. I ultimately selected an [OrangePi 3 LTS](http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/details/orange-pi-3-LTS.html), bundled with a case and power supply for $60.
+![Logitec C310 webcam]({{site.baseurl}}/static/logitec_c310.jpg)
+
+In need of a small always-on computer with WiFi and USB, I seized the opportunity to acquire an ARM SBC, which I have been curious about for years. I ultimately selected an [OrangePi 3 LTS](http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/details/orange-pi-3-LTS.html), bundled with a case and power supply for $60.
+
+![OrangePi 3 LTS board]({{site.baseurl}}/static/orangepi_3_lts.jpg)
 
 ## Sysadmin in the age of Docker
 
-I installed OrangePi's build of Ubuntu per their instructions and set up the system as usual, making sure to edit `sources.list` to change back to US mirrors from the `tsinghua.edu.cn` ones that were originally configured.
+I installed OrangePi's build of Ubuntu per their instructions and set up the system as usual (`ssh`, `ufw`, etc similar to the Linux VPC I have maintained for years). I don't love having to use their kernel rather than a mainline one, but it seems this is not unusual for small boards, and at least there are instructions available for doing it myself if I ever care enough to invest the time. I noticed that `sources.list` used deb mirrors at `tsinghua.edu.cn`, but changing them to the standard US ones seems to work fine.
 
-I have maintained Linux machines in some capacity since high school, typically favoring Debian or Ubuntu. In the old days I went to the trouble of creating my own `deb`s to manage services on [schwink.net](https://schwink.net), but for this project I jumped ship to Docker, and I have been impressed. The dependency on an external service for deployment is annoying (I just use ghcr.io), but it becomes so easy to define dependencies and start/stop the service.
+I have maintained Linux machines in some capacity since high school, typically favoring Debian or Ubuntu. In the old days I went to the trouble of creating my own `deb`s to manage services on [schwink.net](https://schwink.net), but for this project I jumped ship to Docker, and I have been impressed.
+
+The main advantage for me is the ability to bundle system library dependencies (this project wound up using `libopencv` and `libtorch`) and verify locally on my Mac that everything works, by building and running the image with Docker Desktop. No more frantic debugging on the server to figure out why the service isn't starting. I used Docker Compose to run it, which took care of service management overhead like automatically starting the service on system reboot.
+
+The disadvantage of Docker is taking a dependency on an external service for deployment, which I found jarring for a machine which after all is sitting on the same local network as me. I just use ghcr.io, GitHub's free registry.
 
 ## Camera limitations
 
-The [Logitec website](https://www.logitech.com/en-us/shop/p/c310-hd-webcam) tells me that my C310 camera is 1.2 MegaPixels with a 60 degree field of view and fixed focal length. (Incidentally, I am astonished that they are still being sold new, ten years or more after I bought this one.)
+The [Logitec website](https://www.logitech.com/en-us/shop/p/c310-hd-webcam) tells me that my C310 camera is 1.2 MegaPixels with a 60 degree field of view and fixed focal length. (I am astonished that they are still being sold new, ten years or more after I bought this one.)
 
-I originally intended to make an app to watch for the neighborhood cat in my backyard, but the little webcam was not up to this task. Instead, it morphed into an idea to track my family and I getting out of the house on weekday mornings, a process I have been hoping to optimize.
+I originally intended to make an app to watch for the neighborhood cat in my backyard, but the little webcam was not up to this task. Instead, the idea morphed into a system to track my family exiting the house on weekday mornings, a process I have been hoping to optimize.
