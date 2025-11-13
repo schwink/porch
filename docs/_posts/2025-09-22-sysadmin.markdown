@@ -4,7 +4,7 @@ title:  "Hardware and sysadmin"
 date:   2025-09-22 19:55:42 -0800
 tags: arm sbc linux ubuntu orangepi
 ---
-Years ago, I bought a cheap Logitec C310 webcam that I never wound up using, and which was soon obsoleted as the quality of built-in laptop ebcams increased. Finding this camera in a box during a recent house move was the foundation of this image capture project.
+Years ago, I bought a cheap Logitec C310 webcam that I never wound up using, which was soon obsoleted as the quality of built-in laptop webcams improved. Finding this camera in a box during a recent house move was the beginning of this image capture project.
 
 ![Logitec C310 webcam]({{site.baseurl}}/static/logitec_c310.jpg)
 
@@ -26,4 +26,8 @@ The disadvantage of Docker is taking a dependency on an external service for dep
 
 The [Logitec website](https://www.logitech.com/en-us/shop/p/c310-hd-webcam) tells me that my C310 camera is 1.2 MegaPixels with a 60 degree field of view and fixed focal length. (I am astonished that they are still being sold new, ten years or more after I bought this one.)
 
-I originally intended to make an app to watch for the neighborhood cat in my backyard, but the little webcam was not up to this task. Instead, the idea morphed into a system to track my family exiting the house on weekday mornings, a process I have been hoping to optimize.
+I originally intended to make an app to watch for the neighborhood cat in my backyard, but the little webcam was not up to this task.
+
+Instead, the idea morphed into a system to track my family exiting the house on weekday mornings, a process I have been hoping to optimize.
+
+![Exiting the house late]({{site.baseurl}}/static/2025-10-13_15-31-40-092_+0000.jpg)
