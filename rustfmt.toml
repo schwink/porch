@@ -1,0 +1,7 @@
+max_width = 100
+
+# Only available in nightly
+wrap_comments = true
+format_code_in_doc_comments = false
+doc_comment_code_block_width = 100
+comment_width = 100

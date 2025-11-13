@@ -72,28 +72,18 @@ impl Api {
         })
     }
 
-    /**
-     * Load frames with cursor-based pagination.
-     *
-     * [oldest] ... [start of page] ... [end of page] ... [newest]
-     *              ^ start cursor      ^ end cursor
-     *
-     * To fetch neweset frames:
-     *                                       |-------------------|
-     *                                       ^ last: count       ^
-     *
-     * To paginate backwards to older frames:
-     *                   |-------------------|
-     *                   ^ last: count       ^ before: previous start cursor
-     *
-     * To fetch oldest frames: (not implemented)
-     * |-------------------|
-     * ^                   ^ first: count
-     *
-     * To paginate forwards to newer frames: (not implemented)
-     *                     |-------------------------------|
-     *                     ^ after: previous end cursor    ^ first: count
-     */
+    /// Load frames with cursor-based pagination.
+    ///
+    /// [oldest] ... [start of page] ... [end of page] ... [newest]
+    ///              ^ start cursor      ^ end cursor
+    ///
+    /// To fetch newest frames:
+    ///                                       |-------------------|
+    ///                                       ^ last: count       ^ before: None
+    ///
+    /// To paginate backwards to older frames:
+    ///                   |-------------------|
+    ///                   ^ last: count       ^ before: previous start cursor
     pub async fn frames(
         &self,
         last: Option<usize>,

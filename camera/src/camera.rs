@@ -13,6 +13,7 @@ use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::{prelude::*, registry::Registry};
 use uvc::{FrameFormat, StreamFormat};
 
+/// A single frame captured from the camera.
 #[derive(Clone, Debug)]
 pub struct Frame {
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -26,9 +27,33 @@ pub struct Frame {
     pub p_hash: String,
 }
 
-/**
- * Manages access to the camera.
- */
+/// An API for accessing a local webcam over USB.
+///
+/// The camera service is intended to be used as a singleton. It uses `libuvc` to access camera
+/// devices over USB; these devices might not support simultaneous access on multiple threads.
+///
+/// ```
+/// use crate::camera::{CameraService, Frame};
+///
+/// // Create the camera singleton
+/// let camera_service = CameraService::new(None);
+///
+/// {
+///   // Start the service and begin receiving frames via a tokio broadcast channel.
+///   // The frames will be transmitted as long as there is at least one active stream handle.
+///   // It's ok to have multiple active stream handles; they will share the same frames.
+///   let stream_handle = camera_service.start().await;
+///   let mut frame_rx = stream_handle.rx;
+///
+///   let frame: Frame = match frame_rx.recv().await;
+/// }
+/// ```
+///
+/// If the optional `trace_dir` parameter is provided, the camera service will write a new
+/// uniquely-named perfetto trace file in that directory each time the camera runs. The trace
+/// information covers work done in the `libuvc` handler thread to produce a [Frame], such as
+/// converting and resizing the incoming image. To avoid dropping frames, it is important to keep
+/// this operation fast.
 pub struct CameraService {
     weak_self: Weak<CameraService>,
     subscriber_count: Mutex<usize>,
@@ -301,11 +326,11 @@ struct StreamCallbackData {
 }
 
 /**
- * Install trace collection on the current thread, outputting JSON files that can be read as
- * icicle charts by e.g. chrome://tracing/.
+ * Install trace collection on the current thread, outputting JSON files
+ * that can be read as icicle charts by e.g. chrome://tracing/.
  *
- * The stream_callback occurs on a dedicated thread managed by UVC. We don't want to do too much
- * work in this thread lest it become bogged down.
+ * The stream_callback occurs on a dedicated thread managed by UVC. We don't
+ * want to do too much work in this thread lest it become bogged down.
  */
 fn install_tracing(data: &mut StreamCallbackData, timestamp: &chrono::DateTime<chrono::Utc>) {
     if data.trace_dir.is_none() {
@@ -348,9 +373,10 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
     let span = span!(Level::TRACE, "stream_callback");
     let _enter = span.enter();
 
-    // The original UVC frame could use various camera formats and colorspaces, e.g. MJPEG or YUYV.
-    // UVC provides conversion methods for some formats to BGR, while others (i.e. MJPEG) only to RBG.
-    // First attempt to normalize the frame to the BGR colorspace which opencv expects.
+    // The original UVC frame could use various camera formats and colorspaces, e.g.
+    // MJPEG or YUYV. UVC provides conversion methods for some formats to BGR,
+    // while others (i.e. MJPEG) only to RBG. First attempt to normalize the
+    // frame to the BGR colorspace which opencv expects.
     let bgr_frame_conversion = {
         let span = span!(Level::TRACE, "to_bgr");
         let _enter = span.enter();
@@ -394,7 +420,8 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
                         }
                     }
                 } else {
-                    // Could fall back to using frame.to_rgb() and doing that conversion with opencv.
+                    // Could fall back to using frame.to_rgb() and doing that conversion with
+                    // opencv.
                     error!("Unupported frame format {:?}", frame.format());
                     return;
                 }
@@ -407,7 +434,8 @@ fn stream_callback(frame: &uvc::Frame, data: &mut StreamCallbackData) {
         let span = span!(Level::TRACE, "jpeg");
         let _enter = span.enter();
 
-        // Even if the original frame was MJPEG, we still do our own conversion here, because sometimes the original is not compatible with Mac/Safari.
+        // Even if the original frame was MJPEG, we still do our own conversion here,
+        // because sometimes the original is not compatible with Mac/Safari.
         match to_jpeg(&mat) {
             Ok(b) => b,
             Err(e) => {

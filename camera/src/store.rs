@@ -25,31 +25,34 @@ pub struct FrameStoreEntry {
     pub inference: Option<Vec<crate::inference::InferenceResult>>,
 }
 
+/// FrameStore manages storage and retrieval of captured frames and associated metadata.
+///
+/// All information is stored on disk in the specified directory. This is intended to facilitate
+/// `rsync`-ing the directory en masse to another host, alongside any metadata required for model
+/// training.
 #[derive(Debug)]
 pub struct FrameStore {
-    pub image_storage_dir: Box<Path>,
+    pub storage_dir: Box<Path>,
     frame_tx: broadcast::Sender<FrameStoreEntry>,
     pub frame_rx: broadcast::Receiver<FrameStoreEntry>,
 }
 
 impl FrameStore {
-    pub fn new(image_storage_dir: &Path) -> Arc<FrameStore> {
+    pub fn new(storage_dir: &Path) -> Arc<FrameStore> {
         let (frame_tx, frame_rx) = broadcast::channel::<FrameStoreEntry>(32);
 
         Arc::new(FrameStore {
-            image_storage_dir: Box::from(image_storage_dir),
+            storage_dir: Box::from(storage_dir),
             frame_tx: frame_tx,
             frame_rx: frame_rx,
         })
     }
 
-    /**
-     * Save the frame to disk in the central data directory, along with metadata collected at capture
-     * time.
-     *
-     * This produces files {name}.jpg and {name}.json which are consumed by the API and by later stages
-     * in image processing.
-     */
+    /// Save the frame to disk in the central data directory, along with metadata collected at
+    /// capture time. If inference was performed, that data is saved too.
+    ///
+    /// This produces files {name}.jpg and {name}.json which are consumed by the API and by later
+    /// stages in image processing.
     #[tracing::instrument(level = Level::TRACE)]
     pub async fn write_frame_capture_data(
         &self,
@@ -58,7 +61,7 @@ impl FrameStore {
         inference_results: Option<Vec<crate::inference::InferenceResult>>,
     ) -> Result<FrameStoreEntry, Box<dyn Error>> {
         let filename = crate::api::time_to_file_basename(&frame.timestamp);
-        let mut path = self.image_storage_dir.join(&filename);
+        let mut path = self.storage_dir.join(&filename);
 
         let frame_metadata = {
             let span = span!(Level::TRACE, "write_json");
@@ -131,7 +134,7 @@ impl FrameStore {
         frame_name: &str,
         inference_results: &Vec<crate::inference::InferenceResult>,
     ) -> Result<(), Box<dyn Error>> {
-        let mut path = self.image_storage_dir.join(&frame_name);
+        let mut path = self.storage_dir.join(&frame_name);
         path.set_extension("inference.json");
 
         let json = to_string_pretty(&inference_results)?;
@@ -141,6 +144,25 @@ impl FrameStore {
         Ok(())
     }
 
+    /// List frames with cursor-based pagination.
+    ///
+    /// Parameters follow the GraphQL Connection cursor spec.
+    ///
+    /// **Arguments:**
+    ///
+    /// * `before`, `after`: Range bounds for pagination. Rows are returned that are newer than
+    ///   `after` and older than `before`, exclusive. Both or neither filter may be specified. If
+    ///   neither is specified, the newest frames are returned.
+    /// * `first`, `last`: Limits on pagination length. If neither is specified, a default limit of
+    ///   100 rows is applied.
+    ///
+    /// Typically (last, before) or (first, after) would be specified to paginate backwards or
+    /// forwards.
+    ///
+    /// **Returns:**
+    ///
+    /// A list of frames matching the above filters, sorted from newest to oldest (i.e. from largest
+    /// frame key to smallest).
     pub async fn list_frames(
         &self,
         last: Option<usize>,
@@ -148,7 +170,7 @@ impl FrameStore {
         first: Option<usize>,
         after: Option<String>,
     ) -> Result<Vec<FrameStoreEntry>, Box<dyn Error>> {
-        let mut ls = tokio::fs::read_dir(self.image_storage_dir.as_ref()).await?;
+        let mut ls = tokio::fs::read_dir(self.storage_dir.as_ref()).await?;
 
         let mut entries: Vec<tokio::fs::DirEntry> = Vec::new();
         while let Ok(Some(entry)) = ls.next_entry().await {
@@ -266,7 +288,7 @@ impl FrameStore {
     }
 
     pub async fn delete(&self, name: &str) -> Result<(), Box<dyn Error>> {
-        let mut path = self.image_storage_dir.join(name);
+        let mut path = self.storage_dir.join(name);
         path.set_extension("jpg");
         let remove_jpg = tokio::fs::remove_file(&path).await;
         path.set_extension("json");
@@ -330,9 +352,7 @@ mod tests {
         assert_eq!(actual.is_ok(), true);
     }
 
-    /**
-     * Write five test frames with different times
-     */
+    /// Write five test frames with different times
     async fn write_test_frames(store: &FrameStore) {
         let frame = camera::Frame {
             timestamp: DateTime::from_timestamp_millis(1760397622231).unwrap(),

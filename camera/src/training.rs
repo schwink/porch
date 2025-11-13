@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+/// The set of all possible labels that can be applied to a frame.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LabelingConfig {
     #[serde(rename = "tagSets")]
@@ -28,9 +29,7 @@ impl Default for Labels {
     }
 }
 
-/**
- * A set of tags that a frame can be labeled with.
- */
+/// A set of tags that a frame can be labeled with.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TagSet {
     pub name: String,
@@ -47,6 +46,10 @@ pub async fn load_labeling_config(path: &Path) -> Result<LabelingConfig, Box<dyn
     Ok(config)
 }
 
+/// LabelStore manages storage and retrieval of frame labels set via the API.
+///
+/// The labels are stored as JSON files on disk, in practice in the same directory as
+/// [crate::frame::FrameStore] uses. Maybe the two stores should be combined.
 pub struct LabelStore {
     pub config: LabelingConfig,
     storage_dir: Box<Path>,

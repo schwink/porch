@@ -2,6 +2,13 @@
 
 I do local development and testing on my Mac, and periodically build a Docker image to deploy to the device.
 
+### rust
+The nightly toolchain is used for rustfmt.
+
+```
+rustup toolchain install stable nightly
+```
+
 ### uvc
 
 It's necessary to vendor uvc and build it from a more recent revision than its latest tagged release, due to some out of date yanked dependencies.
