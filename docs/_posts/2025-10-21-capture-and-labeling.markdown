@@ -2,7 +2,7 @@
 layout: post
 title:  "Image capture and labeling"
 date:   2025-09-22 19:55:42 -0800
-tags: rust opencv2 tokio axum
+tags: rust opencv2 tokio axum react
 ---
 The camera application is a Rust executable. It runs in Docker, with a USB device (the camera) and a storage volume (on a mounted USB memory stick) configured via Docker Compose.
 

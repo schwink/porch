@@ -1,0 +1,9 @@
+---
+layout: post
+title:  "Training"
+date:   2025-10-31 19:55:42 -0800
+tags: fastai pytorch jupityr
+---
+With enough images captured and labeled, we can train a model.
+
+For details, [please see the Jupityr notebook](https://github.com/schwink/porch/blob/main/training/gate_openness_classifier.ipynb).
